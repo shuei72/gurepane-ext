@@ -1,0 +1,237 @@
+{
+  "name": "gurepane",
+  "displayName": "Gurepane",
+  "description": "Run ripgrep and browse results in a quickfix-style panel.",
+  "version": "0.0.1",
+  "author": "shuei",
+  "publisher": "shuei",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shuei72/gurepane-ext.git"
+  },
+  "homepage": "https://github.com/shuei72/gurepane-ext#readme",
+  "bugs": {
+    "url": "https://github.com/shuei72/gurepane-ext/issues"
+  },
+  "galleryBanner": {
+    "color": "#1f1f1f",
+    "theme": "dark"
+  },
+  "preview": false,
+  "pricing": "Free",
+  "engines": {
+    "vscode": "^1.108.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "ripgrep",
+    "grep",
+    "search",
+    "quickfix",
+    "navigation"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": {
+      "supported": false
+    }
+  },
+  "main": "./out/extension.js",
+  "files": [
+    "out/**",
+    "media/**",
+    "README.md",
+    "LICENSE",
+    "package.json"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "gurepane.search",
+        "title": "Search",
+        "category": "Gurepane",
+        "icon": "$(search)"
+      },
+      {
+        "command": "gurepane.nextResult",
+        "title": "Next Result",
+        "category": "Gurepane",
+        "icon": "$(triangle-down)"
+      },
+      {
+        "command": "gurepane.selectSession",
+        "title": "Switch Result Set",
+        "category": "Gurepane",
+        "icon": "$(unfold)"
+      },
+      {
+        "command": "gurepane.changeSessionQuery",
+        "title": "Search New Word",
+        "category": "Gurepane"
+      },
+      {
+        "command": "gurepane.deleteSession",
+        "title": "Delete",
+        "category": "Gurepane",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "gurepane.saveSessionAsCsv",
+        "title": "Export CSV",
+        "category": "Gurepane"
+      },
+      {
+        "command": "gurepane.deleteResult",
+        "title": "Delete",
+        "category": "Gurepane",
+        "icon": "$(close)"
+      },
+      {
+        "command": "gurepane.copyResult",
+        "title": "Copy",
+        "category": "Gurepane"
+      },
+      {
+        "command": "gurepane.saveSessionAsTsv",
+        "title": "Export TSV",
+        "category": "Gurepane"
+      },
+      {
+        "command": "gurepane.previousResult",
+        "title": "Previous Result",
+        "category": "Gurepane",
+        "icon": "$(triangle-up)"
+      },
+      {
+        "command": "gurepane.openResult",
+        "title": "Open",
+        "category": "Gurepane"
+      },
+      {
+        "command": "gurepane.refresh",
+        "title": "Refresh Search",
+        "category": "Gurepane",
+        "icon": "$(refresh)"
+      }
+    ],
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "gurepane",
+          "title": "Gurepane",
+          "icon": "media/search.svg"
+        }
+      ]
+    },
+    "views": {
+      "gurepane": [
+        {
+          "id": "gurepane.results",
+          "name": "Gurepane Results",
+          "icon": "media/search.svg"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "workbench.action.quickOpenSelectNext",
+        "key": "ctrl+n",
+        "when": "gurepaneHistoryPickerVisible && inQuickOpen"
+      },
+      {
+        "command": "workbench.action.quickOpenSelectPrevious",
+        "key": "ctrl+p",
+        "when": "gurepaneHistoryPickerVisible && inQuickOpen"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "gurepane.search",
+          "when": "view == gurepane.results",
+          "group": "navigation"
+        },
+        {
+          "command": "gurepane.previousResult",
+          "when": "view == gurepane.results",
+          "group": "navigation"
+        },
+        {
+          "command": "gurepane.nextResult",
+          "when": "view == gurepane.results",
+          "group": "navigation"
+        },
+        {
+          "command": "gurepane.selectSession",
+          "when": "view == gurepane.results",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "gurepane.refresh",
+          "when": "view == gurepane.results && viewItem == gurepaneSession",
+          "group": "1_navigation"
+        },
+        {
+          "command": "gurepane.changeSessionQuery",
+          "when": "view == gurepane.results && viewItem == gurepaneSession",
+          "group": "1_navigation"
+        },
+        {
+          "command": "gurepane.saveSessionAsCsv",
+          "when": "view == gurepane.results && viewItem == gurepaneSession",
+          "group": "2_navigation"
+        },
+        {
+          "command": "gurepane.saveSessionAsTsv",
+          "when": "view == gurepane.results && viewItem == gurepaneSession",
+          "group": "2_navigation"
+        },
+        {
+          "command": "gurepane.deleteSession",
+          "when": "view == gurepane.results && viewItem == gurepaneSession",
+          "group": "3_navigation"
+        },
+        {
+          "command": "gurepane.copyResult",
+          "when": "view == gurepane.results && viewItem == gurepaneResult",
+          "group": "1_navigation"
+        },
+        {
+          "command": "gurepane.deleteResult",
+          "when": "view == gurepane.results && viewItem == gurepaneResult",
+          "group": "2_navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Gurepane",
+      "properties": {
+        "gurepane.rgPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path or command name for `rg`. When empty, Gurepane uses `rg` from PATH."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile",
+    "package": "npx @vscode/vsce package",
+    "package:vsix": "npx @vscode/vsce package --out gurepane.vsix"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.12",
+    "@types/vscode": "^1.108.0",
+    "typescript": "^5.4.5"
+  }
+}
