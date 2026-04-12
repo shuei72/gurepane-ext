@@ -113,8 +113,8 @@
         "icon": "$(triangle-up)"
       },
       {
-        "command": "gurepane.openNode",
-        "title": "Open Node",
+        "command": "gurepane.revealCurrentNode",
+        "title": "Reveal Current Node",
         "category": "Gurepane"
       },
       {
@@ -175,6 +175,11 @@
           "command": "gurepane.selectResult",
           "when": "view == gurepane.results",
           "group": "navigation"
+        },
+        {
+          "command": "gurepane.revealCurrentNode",
+          "when": "view == gurepane.results",
+          "group": "navigation"
         }
       ],
       "view/item/context": [
@@ -202,6 +207,11 @@
           "command": "gurepane.deleteResult",
           "when": "view == gurepane.results && viewItem == gurepaneResult",
           "group": "3_navigation"
+        },
+        {
+          "command": "gurepane.revealCurrentNode",
+          "when": "view == gurepane.results && viewItem == gurepaneResult",
+          "group": "1_navigation"
         },
         {
           "command": "gurepane.copyNode",

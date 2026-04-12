@@ -42,6 +42,9 @@ Moves to the next match in the active result.
 `Previous Node`  
 Moves to the previous match in the active result.
 
+`Reveal Current Node`  
+Reopens the current node for the active result and moves the cursor back to that match.
+
 ## Settings
 
 `gurepane.rgPath`  

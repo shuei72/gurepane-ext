@@ -37,6 +37,7 @@ const SAVE_RESULT_AS_TSV_COMMAND = "gurepane.saveResultAsTsv";
 const NEXT_NODE_COMMAND = "gurepane.nextNode";
 const PREVIOUS_NODE_COMMAND = "gurepane.previousNode";
 const OPEN_NODE_COMMAND = "gurepane.openNode";
+const REVEAL_CURRENT_NODE_COMMAND = "gurepane.revealCurrentNode";
 const REFRESH_COMMAND = "gurepane.refreshResult";
 const VIEW_ID = "gurepane.results";
 const OUTPUT_CHANNEL_NAME = "Gurepane";
@@ -108,6 +109,9 @@ class GurepaneController {
 
         await this.openNode(resultId, nodeIndex, true);
       }),
+      vscode.commands.registerCommand(REVEAL_CURRENT_NODE_COMMAND, async (item?: ResultItem) => {
+        await this.revealCurrentNodeCommand(item);
+      }),
       vscode.commands.registerCommand(REFRESH_COMMAND, async (item?: ResultItem) => {
         await this.refreshResult(item);
       })
@@ -155,6 +159,21 @@ class GurepaneController {
       result.extensionFilter,
       result.id
     );
+  }
+
+  private async revealCurrentNodeCommand(item?: ResultItem): Promise<void> {
+    const result = item?.result ?? this.getActiveResult();
+    if (!result) {
+      void vscode.window.showInformationMessage("Run search first.");
+      return;
+    }
+
+    if (result.currentNodeIndex < 0) {
+      void vscode.window.showInformationMessage("No current node to reveal.");
+      return;
+    }
+
+    await this.openNode(result.id, result.currentNodeIndex, true);
   }
 
   private async selectResult(): Promise<void> {
