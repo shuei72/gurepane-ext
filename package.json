@@ -1,7 +1,7 @@
 {
   "name": "gurepane",
   "displayName": "Gurepane",
-  "description": "Run ripgrep and browse results in a quickfix-style panel.",
+  "description": "Browse ripgrep results in a quickfix-style panel and jump between matches quickly.",
   "version": "0.0.1",
   "author": "shuei",
   "publisher": "shuei",
@@ -29,10 +29,14 @@
   ],
   "keywords": [
     "ripgrep",
+    "rg",
     "grep",
     "search",
+    "find in files",
+    "workspace search",
     "quickfix",
-    "navigation"
+    "navigation",
+    "results"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
