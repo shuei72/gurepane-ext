@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, statSync } from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
-import type { SearchResult, SearchSession } from "./types";
+import type { Node, Result } from "./types";
 
 // Prefer workspace-relative paths so result labels stay compact.
 export function getRelativePath(uri: vscode.Uri): string {
@@ -63,8 +63,8 @@ export function getImmediateChildDirectories(targetPath: string): string[] {
   }
 }
 
-export function buildSessionExportFileName(session: SearchSession, extension = "tsv"): string {
-  const normalizedQuery = session.query.replace(/[\\/:*?"<>|]+/g, "_").slice(0, 40) || "search";
+export function buildResultExportFileName(result: Result, extension = "tsv"): string {
+  const normalizedQuery = result.query.replace(/[\\/:*?"<>|]+/g, "_").slice(0, 40) || "search";
   return `gurepane-${normalizedQuery}.${extension}`;
 }
 
@@ -77,62 +77,62 @@ export function buildDefaultExportUri(fileName: string): vscode.Uri {
   return vscode.Uri.file(path.join(process.cwd(), fileName));
 }
 
-export function serializeSessionAsTsv(session: SearchSession): string {
+export function serializeResultAsTsv(result: Result): string {
   const rows = [
     [
-      normalizeTsvField(session.scopeLabel),
-      normalizeTsvField(session.extensionFilter),
+      normalizeTsvField(result.scopeLabel),
+      normalizeTsvField(result.extensionFilter),
       "",
-      normalizeTsvField(session.query),
+      normalizeTsvField(result.query),
       ""
     ].join("\t")
   ];
 
-  for (const result of session.results) {
+  for (const node of result.nodes) {
     rows.push([
-      result.relativePath,
-      String(result.line),
-      String(result.column),
-      getMatchedText(result),
-      normalizeTsvField(result.text)
+      node.relativePath,
+      String(node.line),
+      String(node.column),
+      getMatchedText(node),
+      normalizeTsvField(node.text)
     ].join("\t"));
   }
 
   return `${rows.join("\r\n")}\r\n`;
 }
 
-export function serializeSessionAsCsv(session: SearchSession): string {
+export function serializeResultAsCsv(result: Result): string {
   const rows = [
     [
-      session.scopeLabel,
-      session.extensionFilter,
+      result.scopeLabel,
+      result.extensionFilter,
       "",
-      session.query,
+      result.query,
       ""
     ].map(escapeCsvField).join(",")
   ];
 
-  for (const result of session.results) {
+  for (const node of result.nodes) {
     rows.push([
-      result.relativePath,
-      String(result.line),
-      String(result.column),
-      getMatchedText(result),
-      normalizeTsvField(result.text)
+      node.relativePath,
+      String(node.line),
+      String(node.column),
+      getMatchedText(node),
+      normalizeTsvField(node.text)
     ].map(escapeCsvField).join(","));
   }
 
   return `${rows.join("\r\n")}\r\n`;
 }
 
-function getMatchedText(result: SearchResult): string {
-  const [firstHighlight] = result.highlights;
+function getMatchedText(node: Node): string {
+  const [firstHighlight] = node.highlights;
   if (!firstHighlight) {
     return "";
   }
 
   const [start, end] = firstHighlight;
-  return normalizeTsvField(result.text.slice(start, end));
+  return normalizeTsvField(node.text.slice(start, end));
 }
 
 function normalizeTsvField(value: string): string {

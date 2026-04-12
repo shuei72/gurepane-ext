@@ -15,29 +15,29 @@ import {
   parseRipgrepOutput
 } from "./searchUtils";
 import { GurepaneTreeDataProvider } from "./treeDataProvider";
-import type { ParsedQuery, ResultItem, SearchResult, SearchSession, SessionItem, TreeNode } from "./types";
+import type { Node, NodeItem, ParsedQuery, Result, ResultItem, TreeNode } from "./types";
 import {
   buildDefaultExportUri,
-  buildSessionExportFileName,
+  buildResultExportFileName,
   getImmediateChildDirectories,
   isDirectory,
   removeLastFolderSegment,
-  serializeSessionAsCsv,
-  serializeSessionAsTsv
+  serializeResultAsCsv,
+  serializeResultAsTsv
 } from "./utils";
 
 const SEARCH_COMMAND = "gurepane.search";
-const SELECT_SESSION_COMMAND = "gurepane.selectSession";
-const CHANGE_SESSION_QUERY_COMMAND = "gurepane.changeSessionQuery";
-const DELETE_SESSION_COMMAND = "gurepane.deleteSession";
+const SELECT_RESULT_COMMAND = "gurepane.selectResult";
+const CHANGE_RESULT_QUERY_COMMAND = "gurepane.changeResultQuery";
 const DELETE_RESULT_COMMAND = "gurepane.deleteResult";
-const COPY_RESULT_COMMAND = "gurepane.copyResult";
-const SAVE_SESSION_AS_CSV_COMMAND = "gurepane.saveSessionAsCsv";
-const SAVE_SESSION_AS_TSV_COMMAND = "gurepane.saveSessionAsTsv";
-const NEXT_COMMAND = "gurepane.nextResult";
-const PREVIOUS_COMMAND = "gurepane.previousResult";
-const OPEN_RESULT_COMMAND = "gurepane.openResult";
-const REFRESH_COMMAND = "gurepane.refresh";
+const DELETE_NODE_COMMAND = "gurepane.deleteNode";
+const COPY_NODE_COMMAND = "gurepane.copyNode";
+const SAVE_RESULT_AS_CSV_COMMAND = "gurepane.saveResultAsCsv";
+const SAVE_RESULT_AS_TSV_COMMAND = "gurepane.saveResultAsTsv";
+const NEXT_NODE_COMMAND = "gurepane.nextNode";
+const PREVIOUS_NODE_COMMAND = "gurepane.previousNode";
+const OPEN_NODE_COMMAND = "gurepane.openNode";
+const REFRESH_COMMAND = "gurepane.refreshResult";
 const VIEW_ID = "gurepane.results";
 const OUTPUT_CHANNEL_NAME = "Gurepane";
 const DEFAULT_RG_COMMAND = "rg";
@@ -51,13 +51,13 @@ const EXEC_FILE = promisify(execFile);
 
 class GurepaneController {
   private readonly outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
-  private readonly sessions: SearchSession[] = [];
+  private readonly results: Result[] = [];
   private readonly provider = new GurepaneTreeDataProvider(
-    () => this.sessions,
-    () => this.activeSessionId
+    () => this.results,
+    () => this.activeResultId
   );
   private treeView: vscode.TreeView<TreeNode> | undefined;
-  private activeSessionId: string | undefined;
+  private activeResultId: string | undefined;
   private lastFolderPath = "";
   private extensionContext: vscode.ExtensionContext | undefined;
 
@@ -74,42 +74,42 @@ class GurepaneController {
       vscode.commands.registerCommand(SEARCH_COMMAND, async () => {
         await this.search();
       }),
-      vscode.commands.registerCommand(SELECT_SESSION_COMMAND, async () => {
-        await this.selectSession();
+      vscode.commands.registerCommand(SELECT_RESULT_COMMAND, async () => {
+        await this.selectResult();
       }),
-      vscode.commands.registerCommand(CHANGE_SESSION_QUERY_COMMAND, async (item?: SessionItem) => {
-        await this.changeSessionQuery(item);
-      }),
-      vscode.commands.registerCommand(DELETE_SESSION_COMMAND, async (item?: SessionItem) => {
-        await this.deleteSession(item?.session.id);
+      vscode.commands.registerCommand(CHANGE_RESULT_QUERY_COMMAND, async (item?: ResultItem) => {
+        await this.changeResultQuery(item);
       }),
       vscode.commands.registerCommand(DELETE_RESULT_COMMAND, async (item?: ResultItem) => {
-        await this.deleteResult(item);
+        await this.deleteResult(item?.result.id);
       }),
-      vscode.commands.registerCommand(COPY_RESULT_COMMAND, async (item?: ResultItem) => {
-        await this.copyResult(item);
+      vscode.commands.registerCommand(DELETE_NODE_COMMAND, async (item?: NodeItem) => {
+        await this.deleteNode(item);
       }),
-      vscode.commands.registerCommand(SAVE_SESSION_AS_CSV_COMMAND, async (item?: SessionItem) => {
-        await this.saveSessionAsCsv(item?.session.id);
+      vscode.commands.registerCommand(COPY_NODE_COMMAND, async (item?: NodeItem) => {
+        await this.copyNode(item);
       }),
-      vscode.commands.registerCommand(SAVE_SESSION_AS_TSV_COMMAND, async (item?: SessionItem) => {
-        await this.saveSessionAsTsv(item?.session.id);
+      vscode.commands.registerCommand(SAVE_RESULT_AS_CSV_COMMAND, async (item?: ResultItem) => {
+        await this.saveResultAsCsv(item?.result.id);
       }),
-      vscode.commands.registerCommand(NEXT_COMMAND, async () => {
+      vscode.commands.registerCommand(SAVE_RESULT_AS_TSV_COMMAND, async (item?: ResultItem) => {
+        await this.saveResultAsTsv(item?.result.id);
+      }),
+      vscode.commands.registerCommand(NEXT_NODE_COMMAND, async () => {
         await this.jump(1);
       }),
-      vscode.commands.registerCommand(PREVIOUS_COMMAND, async () => {
+      vscode.commands.registerCommand(PREVIOUS_NODE_COMMAND, async () => {
         await this.jump(-1);
       }),
-      vscode.commands.registerCommand(OPEN_RESULT_COMMAND, async (sessionId?: string, resultIndex?: number) => {
-        if (typeof sessionId !== "string" || typeof resultIndex !== "number") {
+      vscode.commands.registerCommand(OPEN_NODE_COMMAND, async (resultId?: string, nodeIndex?: number) => {
+        if (typeof resultId !== "string" || typeof nodeIndex !== "number") {
           return;
         }
 
-        await this.openResult(sessionId, resultIndex, true);
+        await this.openNode(resultId, nodeIndex, true);
       }),
-      vscode.commands.registerCommand(REFRESH_COMMAND, async (item?: SessionItem) => {
-        await this.refreshSearch(item);
+      vscode.commands.registerCommand(REFRESH_COMMAND, async (item?: ResultItem) => {
+        await this.refreshResult(item);
       })
     );
   }
@@ -136,42 +136,42 @@ class GurepaneController {
     await this.runSearch(query, folderPath, extensionFilter);
   }
 
-  private async refreshSearch(item?: SessionItem): Promise<void> {
-    const session = item?.session ?? this.getActiveSession();
-    if (!session) {
-      void vscode.window.showInformationMessage("Run Gurepane search first.");
+  private async refreshResult(item?: ResultItem): Promise<void> {
+    const result = item?.result ?? this.getActiveResult();
+    if (!result) {
+      void vscode.window.showInformationMessage("Run search first.");
       return;
     }
 
     await this.runSearch(
       {
-        raw: session.rawQuery,
-        pattern: session.query,
-        mode: inferQueryModeFromRaw(session.rawQuery),
-        wholeWord: inferWholeWordFromRaw(session.rawQuery),
-        caseMode: inferQueryCaseModeFromRaw(session.rawQuery)
+        raw: result.rawQuery,
+        pattern: result.query,
+        mode: inferQueryModeFromRaw(result.rawQuery),
+        wholeWord: inferWholeWordFromRaw(result.rawQuery),
+        caseMode: inferQueryCaseModeFromRaw(result.rawQuery)
       },
-      session.scopeLabel === "workspace" ? "" : session.scopeLabel,
-      session.extensionFilter,
-      session.id
+      result.scopeLabel === "workspace" ? "" : result.scopeLabel,
+      result.extensionFilter,
+      result.id
     );
   }
 
-  private async selectSession(): Promise<void> {
-    if (this.sessions.length === 0) {
-      void vscode.window.showInformationMessage("No Gurepane search results to switch.");
+  private async selectResult(): Promise<void> {
+    if (this.results.length === 0) {
+      void vscode.window.showInformationMessage("No results to switch.");
       return;
     }
 
     const picked = await vscode.window.showQuickPick(
-      this.sessions.map((session) => ({
-        label: session.query,
-        description: session.scopeLabel,
-        detail: `${session.extensionFilter || "(all extensions)"} • ${session.results.length} result(s) • ${new Date(session.createdAt).toLocaleString()}`,
-        sessionId: session.id
+      this.results.map((result) => ({
+        label: result.query,
+        description: result.scopeLabel,
+        detail: `${result.extensionFilter || "(all extensions)"} • ${result.nodes.length} node(s) • ${new Date(result.createdAt).toLocaleString()}`,
+        resultId: result.id
       })),
       {
-        placeHolder: "Choose a Gurepane search result set"
+        placeHolder: "Choose result"
       }
     );
 
@@ -179,24 +179,24 @@ class GurepaneController {
       return;
     }
 
-    this.activeSessionId = picked.sessionId;
+    this.activeResultId = picked.resultId;
     this.provider.refresh();
     await this.focusPanel();
 
-    const session = this.getActiveSession();
-    if (session && session.currentIndex >= 0) {
-      await this.revealCurrentResult(session);
+    const result = this.getActiveResult();
+    if (result && result.currentNodeIndex >= 0) {
+      await this.revealCurrentNode(result);
     }
   }
 
-  private async changeSessionQuery(item?: SessionItem): Promise<void> {
-    const session = item?.session ?? this.getActiveSession();
-    if (!session) {
-      void vscode.window.showInformationMessage("No Gurepane search result to reuse.");
+  private async changeResultQuery(item?: ResultItem): Promise<void> {
+    const result = item?.result ?? this.getActiveResult();
+    if (!result) {
+      void vscode.window.showInformationMessage("No result to reuse.");
       return;
     }
 
-    const query = await this.promptQuery(session.rawQuery);
+    const query = await this.promptQuery(result.rawQuery);
     if (!query) {
       return;
     }
@@ -204,76 +204,76 @@ class GurepaneController {
     await this.rememberHistory(QUERY_HISTORY_KEY, query.raw);
     await this.runSearch(
       query,
-      session.scopeLabel === "workspace" ? "" : session.scopeLabel,
-      session.extensionFilter
+      result.scopeLabel === "workspace" ? "" : result.scopeLabel,
+      result.extensionFilter
     );
   }
 
-  private async deleteSession(sessionId?: string): Promise<void> {
-    const resolvedSessionId = sessionId ?? this.activeSessionId;
-    if (!resolvedSessionId) {
-      void vscode.window.showInformationMessage("No Gurepane search result to delete.");
+  private async deleteResult(resultId?: string): Promise<void> {
+    const resolvedResultId = resultId ?? this.activeResultId;
+    if (!resolvedResultId) {
+      void vscode.window.showInformationMessage("No result to delete.");
       return;
     }
 
-    const index = this.sessions.findIndex((session) => session.id === resolvedSessionId);
+    const index = this.results.findIndex((result) => result.id === resolvedResultId);
     if (index < 0) {
       return;
     }
 
-    this.sessions.splice(index, 1);
-    if (this.activeSessionId === resolvedSessionId) {
-      this.activeSessionId = this.sessions[Math.max(0, index - 1)]?.id;
+    this.results.splice(index, 1);
+    if (this.activeResultId === resolvedResultId) {
+      this.activeResultId = this.results[Math.max(0, index - 1)]?.id;
     }
 
     this.provider.refresh();
   }
 
-  private async deleteResult(item?: ResultItem): Promise<void> {
+  private async deleteNode(item?: NodeItem): Promise<void> {
     if (!item) {
       return;
     }
 
-    const session = this.sessions.find((candidate) => candidate.id === item.sessionId);
-    if (!session) {
+    const result = this.results.find((candidate) => candidate.id === item.resultId);
+    if (!result) {
       return;
     }
 
-    session.results.splice(item.resultIndex, 1);
-    if (session.results.length === 0) {
-      await this.deleteSession(session.id);
+    result.nodes.splice(item.nodeIndex, 1);
+    if (result.nodes.length === 0) {
+      await this.deleteResult(result.id);
       return;
     }
 
-    if (session.currentIndex >= session.results.length) {
-      session.currentIndex = session.results.length - 1;
+    if (result.currentNodeIndex >= result.nodes.length) {
+      result.currentNodeIndex = result.nodes.length - 1;
     }
-    if (session.currentIndex > item.resultIndex) {
-      session.currentIndex -= 1;
+    if (result.currentNodeIndex > item.nodeIndex) {
+      result.currentNodeIndex -= 1;
     }
 
-    this.activeSessionId = session.id;
+    this.activeResultId = result.id;
     this.provider.refresh();
   }
 
-  private async copyResult(item?: ResultItem): Promise<void> {
+  private async copyNode(item?: NodeItem): Promise<void> {
     if (!item) {
       return;
     }
 
-    const content = `${item.result.filePath}:${item.result.line}\n${item.result.text}`;
+    const content = `${item.node.filePath}:${item.node.line}\n${item.node.text}`;
     await vscode.env.clipboard.writeText(content);
-    void vscode.window.showInformationMessage("Copied Gurepane result.");
+    void vscode.window.showInformationMessage("Node copied.");
   }
 
-  private async saveSessionAsTsv(sessionId?: string): Promise<void> {
-    const session = this.sessions.find((item) => item.id === (sessionId ?? this.activeSessionId));
-    if (!session) {
-      void vscode.window.showInformationMessage("No Gurepane search result to save.");
+  private async saveResultAsTsv(resultId?: string): Promise<void> {
+    const result = this.results.find((item) => item.id === (resultId ?? this.activeResultId));
+    if (!result) {
+      void vscode.window.showInformationMessage("No result to save.");
       return;
     }
 
-    const defaultFileName = buildSessionExportFileName(session);
+    const defaultFileName = buildResultExportFileName(result);
     const targetUri = await vscode.window.showSaveDialog({
       defaultUri: buildDefaultExportUri(defaultFileName),
       filters: {
@@ -285,19 +285,19 @@ class GurepaneController {
       return;
     }
 
-    const content = serializeSessionAsTsv(session);
+    const content = serializeResultAsTsv(result);
     await vscode.workspace.fs.writeFile(targetUri, Buffer.from(content, "utf8"));
-    void vscode.window.showInformationMessage(`Saved Gurepane results as TSV: ${targetUri.fsPath}`);
+    void vscode.window.showInformationMessage(`Saved TSV: ${targetUri.fsPath}`);
   }
 
-  private async saveSessionAsCsv(sessionId?: string): Promise<void> {
-    const session = this.sessions.find((item) => item.id === (sessionId ?? this.activeSessionId));
-    if (!session) {
-      void vscode.window.showInformationMessage("No Gurepane search result to save.");
+  private async saveResultAsCsv(resultId?: string): Promise<void> {
+    const result = this.results.find((item) => item.id === (resultId ?? this.activeResultId));
+    if (!result) {
+      void vscode.window.showInformationMessage("No result to save.");
       return;
     }
 
-    const defaultFileName = buildSessionExportFileName(session, "csv");
+    const defaultFileName = buildResultExportFileName(result, "csv");
     const targetUri = await vscode.window.showSaveDialog({
       defaultUri: buildDefaultExportUri(defaultFileName),
       filters: {
@@ -309,20 +309,20 @@ class GurepaneController {
       return;
     }
 
-    const content = serializeSessionAsCsv(session);
+    const content = serializeResultAsCsv(result);
     await vscode.workspace.fs.writeFile(targetUri, Buffer.from(content, "utf8"));
-    void vscode.window.showInformationMessage(`Saved Gurepane results as CSV: ${targetUri.fsPath}`);
+    void vscode.window.showInformationMessage(`Saved CSV: ${targetUri.fsPath}`);
   }
 
   private async runSearch(
     query: ParsedQuery,
     folderPath: string,
     extensionFilter: string,
-    replaceSessionId?: string
+    replaceResultId?: string
   ): Promise<void> {
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders || workspaceFolders.length === 0) {
-      void vscode.window.showWarningMessage("Gurepane needs an open workspace.");
+      void vscode.window.showWarningMessage("Open a workspace first.");
       return;
     }
 
@@ -330,7 +330,7 @@ class GurepaneController {
     const targets = this.resolveSearchTargets(folderPath, workspaceFolders);
 
     if (targets.length === 0) {
-      void vscode.window.showWarningMessage("No searchable folder was resolved for Gurepane.");
+      void vscode.window.showWarningMessage("No searchable folder was resolved.");
       return;
     }
 
@@ -356,7 +356,7 @@ class GurepaneController {
       stderr = result.stderr;
     } catch (error) {
       if (isRipgrepNoResults(error)) {
-        this.addSession(query, folderPath, extensionFilter, [], replaceSessionId);
+        this.addResult(query, folderPath, extensionFilter, [], replaceResultId);
         await this.focusPanel();
         void vscode.window.showInformationMessage(`No matches for "${query.raw}".`);
         return;
@@ -364,7 +364,7 @@ class GurepaneController {
 
       const message = formatError(error);
       this.log(`ripgrep failed: ${message}`);
-      void vscode.window.showErrorMessage(`Gurepane could not run ripgrep: ${message}`);
+      void vscode.window.showErrorMessage(`Ripgrep failed: ${message}`);
       return;
     }
 
@@ -372,54 +372,54 @@ class GurepaneController {
       this.log(stderr.trim());
     }
 
-    const results = parseRipgrepOutput(stdout);
-    const session = this.addSession(query, folderPath, extensionFilter, results, replaceSessionId);
+    const nodes = parseRipgrepOutput(stdout);
+    const result = this.addResult(query, folderPath, extensionFilter, nodes, replaceResultId);
     await this.focusPanel();
-    if (session.currentIndex >= 0) {
-      await this.openSearchResult(session.results[session.currentIndex]);
-      await this.revealCurrentResult(session);
+    if (result.currentNodeIndex >= 0) {
+      await this.openNode(result.id, result.currentNodeIndex, false);
+      await this.revealCurrentNode(result);
     }
-    void vscode.window.showInformationMessage(`Gurepane found ${results.length} result(s) for "${query.raw}".`);
+    void vscode.window.showInformationMessage(`Found ${nodes.length} node(s) for "${query.raw}".`);
   }
 
-  private addSession(
+  private addResult(
     query: ParsedQuery,
     folderPath: string,
     extensionFilter: string,
-    results: SearchResult[],
-    replaceSessionId?: string
-  ): SearchSession {
-    const session: SearchSession = {
-      id: replaceSessionId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    nodes: Node[],
+    replaceResultId?: string
+  ): Result {
+    const result: Result = {
+      id: replaceResultId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       query: query.pattern,
       rawQuery: query.raw,
       scopeLabel: folderPath.trim().length > 0 ? folderPath : "workspace",
       extensionFilter,
       createdAt: Date.now(),
-      results,
-      currentIndex: results.length > 0 ? 0 : -1
+      nodes,
+      currentNodeIndex: nodes.length > 0 ? 0 : -1
     };
 
-    if (replaceSessionId) {
-      const index = this.sessions.findIndex((item) => item.id === replaceSessionId);
+    if (replaceResultId) {
+      const index = this.results.findIndex((item) => item.id === replaceResultId);
       if (index >= 0) {
-        this.sessions.splice(index, 1, session);
+        this.results.splice(index, 1, result);
       } else {
-        this.sessions.push(session);
+        this.results.push(result);
       }
     } else {
-      this.sessions.push(session);
+      this.results.push(result);
     }
 
-    this.activeSessionId = session.id;
+    this.activeResultId = result.id;
     this.provider.refresh();
-    return session;
+    return result;
   }
 
   private async promptExtensionFilter(): Promise<string | undefined> {
     const selected = await this.pickHistoryValue({
       historyKey: EXTENSION_HISTORY_KEY,
-      placeHolder: "Choose recent extensions or enter new",
+      placeHolder: "Recent extensions",
       createNewLabel: "Enter extensions",
       emptyLabel: "(all extensions)",
       iconId: "symbol-string"
@@ -427,7 +427,7 @@ class GurepaneController {
     const initialValue = selected ?? "";
 
     const value = await this.showEditableInputBox({
-      prompt: "Extensions to search",
+      prompt: "Extensions",
       placeHolder: "Example: ts,tsx,js (empty = all files)",
       value: initialValue
     });
@@ -441,7 +441,7 @@ class GurepaneController {
   private async promptSearchFolder(): Promise<string | undefined> {
     const selected = await this.pickHistoryValue({
       historyKey: FOLDER_HISTORY_KEY,
-      placeHolder: "Choose recent folder or enter new",
+      placeHolder: "Recent folders",
       createNewLabel: "Enter folder",
       emptyLabel: "Workspace",
       iconId: "folder"
@@ -456,7 +456,7 @@ class GurepaneController {
       let pickingChildFolder = false;
       let suppressHideOnce = false;
 
-      inputBox.prompt = "Search folder";
+      inputBox.prompt = "Folder";
       inputBox.placeholder = "Empty = workspace, . = current folder, .. = up one level, @ = previous folder";
       inputBox.value = initialValue;
       inputBox.valueSelection = [initialValue.length, initialValue.length];
@@ -562,15 +562,15 @@ class GurepaneController {
   private async promptQuery(initialValue = ""): Promise<ParsedQuery | undefined> {
     const selected = await this.pickHistoryValue({
       historyKey: QUERY_HISTORY_KEY,
-      placeHolder: "Choose recent keyword or enter new",
+      placeHolder: "Recent keywords",
       createNewLabel: "Enter keyword",
       iconId: "symbol-text"
     });
     const nextInitialValue = selected ?? initialValue;
 
     const value = await this.showEditableInputBox({
-      prompt: "Search text for ripgrep",
-      placeHolder: `Prefix before ${QUERY_MODE_DELIMITER}: b word, t text, r regex, c ignore case, C case sensitive, s smart case`,
+      prompt: "Search text",
+      placeHolder: `Default is regex smart case. Use t${QUERY_MODE_DELIMITER} for literal text; b word, r regex, c ignore case, C case sensitive, s smart case`,
       value: nextInitialValue
     });
     if (value === undefined) {
@@ -580,61 +580,61 @@ class GurepaneController {
     return parseQueryInput(value);
   }
 
-  private getActiveSession(): SearchSession | undefined {
-    return this.sessions.find((session) => session.id === this.activeSessionId) ?? this.sessions.at(-1);
+  private getActiveResult(): Result | undefined {
+    return this.results.find((result) => result.id === this.activeResultId) ?? this.results.at(-1);
   }
 
   private async jump(offset: number): Promise<void> {
-    const session = this.getActiveSession();
-    if (!session || session.results.length === 0) {
-      void vscode.window.showInformationMessage("No Gurepane results to navigate.");
+    const result = this.getActiveResult();
+    if (!result || result.nodes.length === 0) {
+      void vscode.window.showInformationMessage("No results to navigate.");
       return;
     }
 
-    const length = session.results.length;
-    const current = session.currentIndex >= 0 ? session.currentIndex : 0;
-    session.currentIndex = (current + offset + length) % length;
-    await this.openSearchResult(session.results[session.currentIndex]);
+    const length = result.nodes.length;
+    const current = result.currentNodeIndex >= 0 ? result.currentNodeIndex : 0;
+    result.currentNodeIndex = (current + offset + length) % length;
+    await this.openNode(result.id, result.currentNodeIndex, false);
     this.provider.refresh();
-    await this.revealCurrentResult(session);
+    await this.revealCurrentNode(result);
   }
 
-  private async openResult(sessionId: string, resultIndex: number, reveal: boolean): Promise<void> {
-    const session = this.sessions.find((item) => item.id === sessionId);
-    if (!session) {
-      return;
-    }
-
-    const result = session.results[resultIndex];
+  private async openNode(resultId: string, nodeIndex: number, reveal: boolean): Promise<void> {
+    const result = this.results.find((item) => item.id === resultId);
     if (!result) {
       return;
     }
 
-    this.activeSessionId = sessionId;
-    session.currentIndex = resultIndex;
-    await this.openSearchResult(result);
+    const node = result.nodes[nodeIndex];
+    if (!node) {
+      return;
+    }
+
+    this.activeResultId = resultId;
+    result.currentNodeIndex = nodeIndex;
+    await this.openNodeDocument(node);
     this.provider.refresh();
     if (reveal) {
-      await this.revealCurrentResult(session);
+      await this.revealCurrentNode(result);
     }
   }
 
-  private async revealCurrentResult(session: SearchSession): Promise<void> {
-    if (!this.treeView || session.currentIndex < 0) {
+  private async revealCurrentNode(result: Result): Promise<void> {
+    if (!this.treeView || result.currentNodeIndex < 0) {
       return;
     }
 
-    const result = session.results[session.currentIndex];
-    if (!result) {
+    const node = result.nodes[result.currentNodeIndex];
+    if (!node) {
       return;
     }
 
     await this.treeView.reveal(
       {
-        kind: "result",
-        sessionId: session.id,
-        resultIndex: session.currentIndex,
-        result
+        kind: "node",
+        resultId: result.id,
+        nodeIndex: result.currentNodeIndex,
+        node
       },
       {
         focus: false,
@@ -644,11 +644,11 @@ class GurepaneController {
     );
   }
 
-  private async openSearchResult(result: SearchResult): Promise<void> {
-    const document = await vscode.workspace.openTextDocument(result.uri);
+  private async openNodeDocument(node: Node): Promise<void> {
+    const document = await vscode.workspace.openTextDocument(node.uri);
     const position = new vscode.Position(
-      Math.max(result.line - 1, 0),
-      Math.max(result.column - 1, 0)
+      Math.max(node.line - 1, 0),
+      Math.max(node.column - 1, 0)
     );
     const selection = new vscode.Selection(position, position);
     const editor = await vscode.window.showTextDocument(document, {

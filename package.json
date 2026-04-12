@@ -63,63 +63,63 @@
         "icon": "$(search)"
       },
       {
-        "command": "gurepane.nextResult",
-        "title": "Next Result",
+        "command": "gurepane.nextNode",
+        "title": "Next Node",
         "category": "Gurepane",
         "icon": "$(triangle-down)"
       },
       {
-        "command": "gurepane.selectSession",
-        "title": "Switch Result Set",
+        "command": "gurepane.selectResult",
+        "title": "Switch Result",
         "category": "Gurepane",
         "icon": "$(unfold)"
       },
       {
-        "command": "gurepane.changeSessionQuery",
-        "title": "Search New Word",
-        "category": "Gurepane"
-      },
-      {
-        "command": "gurepane.deleteSession",
-        "title": "Delete",
-        "category": "Gurepane",
-        "icon": "$(trash)"
-      },
-      {
-        "command": "gurepane.saveSessionAsCsv",
-        "title": "Export CSV",
+        "command": "gurepane.changeResultQuery",
+        "title": "Search Again with Same Scope",
         "category": "Gurepane"
       },
       {
         "command": "gurepane.deleteResult",
-        "title": "Delete",
+        "title": "Delete Result",
+        "category": "Gurepane",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "gurepane.saveResultAsCsv",
+        "title": "Export Result as CSV",
+        "category": "Gurepane"
+      },
+      {
+        "command": "gurepane.deleteNode",
+        "title": "Delete Node",
         "category": "Gurepane",
         "icon": "$(close)"
       },
       {
-        "command": "gurepane.copyResult",
-        "title": "Copy",
+        "command": "gurepane.copyNode",
+        "title": "Copy Node",
         "category": "Gurepane"
       },
       {
-        "command": "gurepane.saveSessionAsTsv",
-        "title": "Export TSV",
+        "command": "gurepane.saveResultAsTsv",
+        "title": "Export Result as TSV",
         "category": "Gurepane"
       },
       {
-        "command": "gurepane.previousResult",
-        "title": "Previous Result",
+        "command": "gurepane.previousNode",
+        "title": "Previous Node",
         "category": "Gurepane",
         "icon": "$(triangle-up)"
       },
       {
-        "command": "gurepane.openResult",
-        "title": "Open",
+        "command": "gurepane.openNode",
+        "title": "Open Node",
         "category": "Gurepane"
       },
       {
-        "command": "gurepane.refresh",
-        "title": "Refresh Search",
+        "command": "gurepane.refreshResult",
+        "title": "Refresh",
         "category": "Gurepane",
         "icon": "$(refresh)"
       }
@@ -162,55 +162,55 @@
           "group": "navigation"
         },
         {
-          "command": "gurepane.previousResult",
+          "command": "gurepane.previousNode",
           "when": "view == gurepane.results",
           "group": "navigation"
         },
         {
-          "command": "gurepane.nextResult",
+          "command": "gurepane.nextNode",
           "when": "view == gurepane.results",
           "group": "navigation"
         },
         {
-          "command": "gurepane.selectSession",
+          "command": "gurepane.selectResult",
           "when": "view == gurepane.results",
           "group": "navigation"
         }
       ],
       "view/item/context": [
         {
-          "command": "gurepane.refresh",
-          "when": "view == gurepane.results && viewItem == gurepaneSession",
-          "group": "1_navigation"
-        },
-        {
-          "command": "gurepane.changeSessionQuery",
-          "when": "view == gurepane.results && viewItem == gurepaneSession",
-          "group": "1_navigation"
-        },
-        {
-          "command": "gurepane.saveSessionAsCsv",
-          "when": "view == gurepane.results && viewItem == gurepaneSession",
-          "group": "2_navigation"
-        },
-        {
-          "command": "gurepane.saveSessionAsTsv",
-          "when": "view == gurepane.results && viewItem == gurepaneSession",
-          "group": "2_navigation"
-        },
-        {
-          "command": "gurepane.deleteSession",
-          "when": "view == gurepane.results && viewItem == gurepaneSession",
-          "group": "3_navigation"
-        },
-        {
-          "command": "gurepane.copyResult",
+          "command": "gurepane.refreshResult",
           "when": "view == gurepane.results && viewItem == gurepaneResult",
           "group": "1_navigation"
+        },
+        {
+          "command": "gurepane.changeResultQuery",
+          "when": "view == gurepane.results && viewItem == gurepaneResult",
+          "group": "1_navigation"
+        },
+        {
+          "command": "gurepane.saveResultAsCsv",
+          "when": "view == gurepane.results && viewItem == gurepaneResult",
+          "group": "2_navigation"
+        },
+        {
+          "command": "gurepane.saveResultAsTsv",
+          "when": "view == gurepane.results && viewItem == gurepaneResult",
+          "group": "2_navigation"
         },
         {
           "command": "gurepane.deleteResult",
           "when": "view == gurepane.results && viewItem == gurepaneResult",
+          "group": "3_navigation"
+        },
+        {
+          "command": "gurepane.copyNode",
+          "when": "view == gurepane.results && viewItem == gurepaneNode",
+          "group": "1_navigation"
+        },
+        {
+          "command": "gurepane.deleteNode",
+          "when": "view == gurepane.results && viewItem == gurepaneNode",
           "group": "2_navigation"
         }
       ]

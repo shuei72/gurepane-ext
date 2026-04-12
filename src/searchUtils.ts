@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { ParsedQuery, QueryCaseMode, QueryMode, SearchResult } from "./types";
+import type { Node, ParsedQuery, QueryCaseMode, QueryMode } from "./types";
 import { getRelativePath } from "./utils";
 
 const QUERY_MODE_DELIMITER = ">";
@@ -100,8 +100,8 @@ export function buildQueryModeArgs(query: ParsedQuery): string[] {
 }
 
 // Group by file path so we only need to sort file buckets, not every hit.
-export function parseRipgrepOutput(stdout: string): SearchResult[] {
-  const resultsByPath = new Map<string, SearchResult[]>();
+export function parseRipgrepOutput(stdout: string): Node[] {
+  const nodesByPath = new Map<string, Node[]>();
 
   for (const line of stdout.split(/\r?\n/)) {
     if (!line) {
@@ -111,16 +111,16 @@ export function parseRipgrepOutput(stdout: string): SearchResult[] {
     const parsed = parseRipgrepJsonLine(line);
     if (parsed) {
       for (const result of parsed) {
-        const bucket = resultsByPath.get(result.relativePath) ?? [];
+        const bucket = nodesByPath.get(result.relativePath) ?? [];
         bucket.push(result);
-        resultsByPath.set(result.relativePath, bucket);
+        nodesByPath.set(result.relativePath, bucket);
       }
     }
   }
 
-  return [...resultsByPath.keys()]
+  return [...nodesByPath.keys()]
     .sort((left, right) => left.localeCompare(right))
-    .flatMap((relativePath) => resultsByPath.get(relativePath) ?? []);
+    .flatMap((relativePath) => nodesByPath.get(relativePath) ?? []);
 }
 
 export function isRipgrepNoResults(error: unknown): boolean {
@@ -192,7 +192,7 @@ function parsePrefixFlags(prefix: string): {
   };
 }
 
-function parseRipgrepJsonLine(line: string): SearchResult[] | undefined {
+function parseRipgrepJsonLine(line: string): Node[] | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
@@ -224,7 +224,7 @@ function parseRipgrepJsonLine(line: string): SearchResult[] | undefined {
       column: columnNumber,
       text: lineText,
       highlights: [[startIndex, endIndex]]
-    } satisfies SearchResult;
+    } satisfies Node;
   });
 }
 
