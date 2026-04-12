@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="media/icon.png" alt="Gurepane icon" width="128" />
+</p>
+
 # Gurepane
 
 Gurepane is a VS Code extension that runs `rg` and shows search results in a quickfix-style tree view inside the panel.
