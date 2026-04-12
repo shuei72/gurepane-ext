@@ -1,0 +1,5 @@
+{
+  "terminal.integrated.env.windows": {
+    "GIT_OPTIONAL_LOCKS": "0"
+  }
+}
