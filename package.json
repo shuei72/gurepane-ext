@@ -232,6 +232,11 @@
           "type": "string",
           "default": "",
           "markdownDescription": "Absolute path or command name for `rg`. When empty, Gurepane uses `rg` from PATH."
+        },
+        "gurepane.esPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path or command name for `es.exe`. When empty, Gurepane uses `es.exe` from PATH to collect folder candidates, and falls back to local folder scanning if it is unavailable."
         }
       }
     }

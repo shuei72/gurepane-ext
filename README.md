@@ -15,15 +15,13 @@ Gurepane is a VS Code extension that runs `rg` and shows search results in a qui
 - Highlights matched text using ripgrep's JSON match ranges.
 - Can export a top-level result as TSV.
 
-### Folder Prompt Shortcuts
+### Folder Prompt
 
-In the folder input after entering the search text:
+The folder picker opens directly as a search UI.
 
-- Empty input: search the whole workspace
-- `. `: insert the current editor's folder path
-- `.. `: move one level up from the current input
-- `@ `: insert the previous folder path
-- `/` or `\\` at the end: open child folder candidates
+- Type any part of a folder name or path to search folders
+- Press Enter on `Workspace` to search the whole workspace
+- If Everything's `es.exe` is available, folder candidates come from Everything instead of local scanning
 
 ## Commands
 
@@ -53,6 +51,9 @@ Reopens the current node for the active result and moves the cursor back to that
 
 `gurepane.rgPath`  
 Absolute path or command name for `rg`. When empty, Gurepane uses `rg` from `PATH`.
+
+`gurepane.esPath`  
+Absolute path or command name for `es.exe`. When empty, Gurepane uses `es.exe` from `PATH` to collect folder candidates, and falls back to local folder scanning if it is unavailable.
 
 ## Development
 

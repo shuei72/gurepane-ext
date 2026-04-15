@@ -48,16 +48,34 @@ export function isDirectory(targetPath: string): boolean {
   }
 }
 
-// Child folder completion only needs one level, so keep this intentionally shallow.
-export function getImmediateChildDirectories(targetPath: string): string[] {
+// Recursively collect descendant folders so Quick Pick can match by any path segment.
+export function getDescendantDirectories(targetPath: string): string[] {
   if (!isDirectory(targetPath)) {
     return [];
   }
 
+  const directories: string[] = [];
+  const stack = [targetPath];
+
   try {
-    return readdirSync(targetPath, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => path.join(targetPath, entry.name));
+    while (stack.length > 0) {
+      const currentPath = stack.pop();
+      if (!currentPath) {
+        continue;
+      }
+
+      for (const entry of readdirSync(currentPath, { withFileTypes: true })) {
+        if (!entry.isDirectory()) {
+          continue;
+        }
+
+        const childPath = path.join(currentPath, entry.name);
+        directories.push(childPath);
+        stack.push(childPath);
+      }
+    }
+
+    return directories;
   } catch {
     return [];
   }

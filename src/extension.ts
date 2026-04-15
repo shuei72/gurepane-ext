@@ -19,9 +19,8 @@ import type { Node, NodeItem, ParsedQuery, Result, ResultItem, TreeNode } from "
 import {
   buildDefaultExportUri,
   buildResultExportFileName,
-  getImmediateChildDirectories,
+  getDescendantDirectories,
   isDirectory,
-  removeLastFolderSegment,
   serializeResultAsCsv,
   serializeResultAsTsv
 } from "./utils";
@@ -42,13 +41,20 @@ const REFRESH_COMMAND = "gurepane.refreshResult";
 const VIEW_ID = "gurepane.results";
 const OUTPUT_CHANNEL_NAME = "Gurepane";
 const DEFAULT_RG_COMMAND = "rg";
+const DEFAULT_ES_COMMAND = "es.exe";
 const MAX_BUFFER = 64 * 1024 * 1024;
+const MAX_FOLDER_CANDIDATES = 200;
 const HISTORY_LIMIT = 10;
 const QUERY_HISTORY_KEY = "gurepane.queryHistory";
 const FOLDER_HISTORY_KEY = "gurepane.folderHistory";
 const EXTENSION_HISTORY_KEY = "gurepane.extensionHistory";
 const QUERY_MODE_DELIMITER = ">";
 const EXEC_FILE = promisify(execFile);
+
+type FolderCandidateItem = vscode.QuickPickItem & {
+  readonly filterText?: string;
+  readonly targetPath: string;
+};
 
 class GurepaneController {
   private readonly outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
@@ -466,116 +472,13 @@ class GurepaneController {
       iconId: "folder"
     });
     const initialValue = selected ?? "";
+    const picked = await this.pickFolderCandidate(initialValue);
+    if (picked === undefined) {
+      return undefined;
+    }
 
-    return await new Promise<string | undefined>((resolve) => {
-      const inputBox = vscode.window.createInputBox();
-      let currentValue = initialValue;
-      let handlingShortcut = false;
-      let accepted = false;
-      let pickingChildFolder = false;
-      let suppressHideOnce = false;
-
-      inputBox.prompt = "Folder";
-      inputBox.placeholder = "Empty = workspace, . = current folder, .. = up one level, @ = previous folder";
-      inputBox.value = initialValue;
-      inputBox.valueSelection = [initialValue.length, initialValue.length];
-
-      const changeDisposable = inputBox.onDidChangeValue((value) => {
-        if (handlingShortcut) {
-          currentValue = value;
-          return;
-        }
-
-        if (value.endsWith(". ") && !value.endsWith(".. ")) {
-          const currentFolderPath = this.getCurrentEditorFolderPath();
-          if (!currentFolderPath) {
-            return;
-          }
-
-          handlingShortcut = true;
-          inputBox.value = currentFolderPath;
-          inputBox.valueSelection = [currentFolderPath.length, currentFolderPath.length];
-          currentValue = currentFolderPath;
-          handlingShortcut = false;
-          return;
-        }
-
-        if (value.endsWith(".. ")) {
-          const baseValue = value.slice(0, -3).trimEnd();
-          const nextValue = removeLastFolderSegment(baseValue);
-          handlingShortcut = true;
-          inputBox.value = nextValue;
-          inputBox.valueSelection = [nextValue.length, nextValue.length];
-          currentValue = nextValue;
-          handlingShortcut = false;
-          return;
-        }
-
-        if (value.endsWith("@ ")) {
-          const nextValue = this.lastFolderPath;
-          handlingShortcut = true;
-          inputBox.value = nextValue;
-          inputBox.valueSelection = [nextValue.length, nextValue.length];
-          currentValue = nextValue;
-          handlingShortcut = false;
-          return;
-        }
-
-        if (value.endsWith("/") || value.endsWith("\\")) {
-          const baseValue = value.replace(/[\\/]+$/g, "");
-          pickingChildFolder = true;
-          suppressHideOnce = true;
-          void this.pickChildFolder(baseValue).then((pickedPath) => {
-            pickingChildFolder = false;
-            if (pickedPath === undefined) {
-              inputBox.show();
-              return;
-            }
-
-            handlingShortcut = true;
-            inputBox.value = pickedPath;
-            inputBox.valueSelection = [pickedPath.length, pickedPath.length];
-            currentValue = pickedPath;
-            inputBox.show();
-            handlingShortcut = false;
-          });
-          return;
-        }
-
-        currentValue = value;
-      });
-
-      const acceptDisposable = inputBox.onDidAccept(() => {
-        accepted = true;
-        const normalized = inputBox.value.trim();
-        this.lastFolderPath = normalized;
-        cleanup();
-        resolve(normalized);
-      });
-
-      const hideDisposable = inputBox.onDidHide(() => {
-        if (suppressHideOnce || pickingChildFolder) {
-          suppressHideOnce = false;
-          return;
-        }
-
-        if (accepted) {
-          return;
-        }
-
-        cleanup();
-        resolve(undefined);
-      });
-
-      function cleanup(): void {
-        changeDisposable.dispose();
-        acceptDisposable.dispose();
-        hideDisposable.dispose();
-        inputBox.dispose();
-      }
-
-      inputBox.show();
-    });
+    this.lastFolderPath = picked;
+    return picked;
   }
 
   private async promptQuery(initialValue = ""): Promise<ParsedQuery | undefined> {
@@ -711,50 +614,116 @@ class GurepaneController {
     return path.dirname(document.uri.fsPath).replace(/\\/g, "/");
   }
 
-  private async pickChildFolder(baseValue: string): Promise<string | undefined> {
-    const candidates = this.getChildFolderCandidates(baseValue);
-    if (candidates.length === 0) {
-      void vscode.window.showInformationMessage("No child folders found.");
+  private async pickFolderCandidate(initialValue: string): Promise<string | undefined> {
+    const workspaceFolders = vscode.workspace.workspaceFolders?.filter((folder) => folder.uri.scheme === "file") ?? [];
+    if (workspaceFolders.length === 0) {
       return undefined;
     }
 
-    const picked = await vscode.window.showQuickPick(candidates, {
-      placeHolder: "Choose a child folder"
-    });
+    return await new Promise<string | undefined>((resolve) => {
+      const quickPick = vscode.window.createQuickPick<FolderCandidateItem>();
+      let accepted = false;
+      let disposed = false;
 
-    return picked?.targetPath;
-  }
+      quickPick.title = "Choose a folder";
+      quickPick.placeholder = "Type a folder name or path to search Everything";
+      quickPick.matchOnDescription = true;
+      quickPick.matchOnDetail = true;
+      quickPick.canSelectMany = false;
+      quickPick.value = initialValue.trim();
 
-  private getChildFolderCandidates(baseValue: string): Array<vscode.QuickPickItem & { readonly targetPath: string }> {
-    const workspaceFolders = vscode.workspace.workspaceFolders?.filter((folder) => folder.uri.scheme === "file") ?? [];
-    if (workspaceFolders.length === 0) {
-      return [];
-    }
+      const setCandidates = async (rawQuery: string) => {
+        const query = rawQuery.trim();
+        quickPick.busy = true;
 
-    const seen = new Set<string>();
-    const candidates: Array<vscode.QuickPickItem & { readonly targetPath: string }> = [];
+        try {
+          const candidates = query.length > 0
+            ? await this.getFolderCandidatesFromEverything(query, workspaceFolders)
+            : this.getInitialFolderCandidates(workspaceFolders);
 
-    if (baseValue.trim().length === 0) {
-      for (const folder of workspaceFolders) {
-        const targetPath = folder.uri.fsPath.replace(/\\/g, "/");
-        if (seen.has(targetPath)) {
-          continue;
+          if (disposed) {
+            return;
+          }
+
+          const preferredItem = this.pickBestFolderCandidate(query, candidates);
+          quickPick.selectedItems = [];
+          quickPick.items = candidates;
+          quickPick.activeItems = preferredItem ? [preferredItem] : [];
+        } finally {
+          if (!disposed) {
+            quickPick.busy = false;
+          }
+        }
+      };
+
+      const valueChangeDisposable = quickPick.onDidChangeValue((value) => {
+        void setCandidates(value);
+      });
+
+      const acceptDisposable = quickPick.onDidAccept(() => {
+        accepted = true;
+        const picked = quickPick.selectedItems[0] ?? quickPick.activeItems[0];
+        cleanup();
+        resolve(picked?.targetPath);
+      });
+
+      const hideDisposable = quickPick.onDidHide(() => {
+        if (accepted) {
+          return;
         }
 
-        seen.add(targetPath);
+        cleanup();
+        resolve(undefined);
+      });
+
+      const cleanup = () => {
+        disposed = true;
+        valueChangeDisposable.dispose();
+        acceptDisposable.dispose();
+        hideDisposable.dispose();
+        quickPick.dispose();
+      };
+
+      void setCandidates(quickPick.value);
+      quickPick.show();
+    });
+  }
+
+  private getInitialFolderCandidates(
+    workspaceFolders: readonly vscode.WorkspaceFolder[]
+  ): FolderCandidateItem[] {
+    return workspaceFolders.map((folder) => {
+      const targetPath = this.normalizeFolderPath(folder.uri.fsPath);
+      return {
+        label: folder.name,
+        description: targetPath,
+        targetPath
+      };
+    });
+  }
+
+  private getFolderCandidatesFromFilesystem(
+    query: string,
+    workspaceFolders: readonly vscode.WorkspaceFolder[]
+  ): FolderCandidateItem[] {
+    const seen = new Set<string>();
+    const candidates: FolderCandidateItem[] = [];
+
+    this.log(`Filesystem fallback query="${query}"`);
+
+    for (const folder of workspaceFolders) {
+      const rootPath = this.normalizeFolderPath(folder.uri.fsPath);
+      if (!seen.has(rootPath)) {
+        seen.add(rootPath);
         candidates.push({
           label: folder.name,
-          description: targetPath,
-          targetPath
+          description: rootPath,
+          targetPath: rootPath
         });
       }
 
-      return candidates;
-    }
-
-    for (const parentPath of this.resolveSearchTargets(baseValue, workspaceFolders)) {
-      for (const childPath of getImmediateChildDirectories(parentPath)) {
-        const normalizedChildPath = childPath.replace(/\\/g, "/");
+      for (const childPath of getDescendantDirectories(folder.uri.fsPath)) {
+        const normalizedChildPath = this.normalizeFolderPath(childPath);
         if (seen.has(normalizedChildPath)) {
           continue;
         }
@@ -768,14 +737,133 @@ class GurepaneController {
       }
     }
 
+    return candidates;
+  }
+
+  private pickBestFolderCandidate(query: string, candidates: FolderCandidateItem[]): FolderCandidateItem | undefined {
+    if (candidates.length === 0) {
+      return undefined;
+    }
+
+    const normalizedQuery = query.trim().toLowerCase();
+    if (normalizedQuery.length === 0) {
+      return candidates[0];
+    }
+
+    return (
+      candidates.find((candidate) => (candidate.description ?? "").toLowerCase() === normalizedQuery) ??
+      candidates.find((candidate) => (candidate.description ?? "").toLowerCase().includes(normalizedQuery)) ??
+      candidates[0]
+    );
+  }
+
+  private async getFolderCandidatesFromEverything(
+    query: string,
+    workspaceFolders: readonly vscode.WorkspaceFolder[]
+  ): Promise<FolderCandidateItem[]> {
+    const esCommand = this.resolveEsCommand();
+    const searchTerms = this.getEverythingSearchTerms(query);
+    const seen = new Set<string>();
+    const candidates: FolderCandidateItem[] = [];
+    const args = ["/ad", "-p", "-s", "-n", String(MAX_FOLDER_CANDIDATES), ...searchTerms];
+
+    this.log(`Everything search command=${esCommand} args=${args.map((arg) => JSON.stringify(arg)).join(" ")}`);
+
+    try {
+      if (searchTerms.length === 0) {
+        this.log("Everything search skipped because there are no search terms.");
+        return this.getFolderCandidatesFromFilesystem(query, workspaceFolders);
+      }
+
+      const result = await EXEC_FILE(
+        esCommand,
+        args,
+        {
+          windowsHide: true,
+          maxBuffer: MAX_BUFFER
+        }
+      );
+
+      const stdoutLines = result.stdout.split(/\r?\n/).filter((line) => line.trim().length > 0);
+      this.log(`Everything stdout lines=${stdoutLines.length} stderrLength=${result.stderr.trim().length}`);
+      this.log(`Everything stdout sample=${stdoutLines.slice(0, 10).join(" | ")}`);
+
+      for (const normalizedPath of this.parseEverythingFolderOutput(result.stdout)) {
+        if (seen.has(normalizedPath)) {
+          continue;
+        }
+
+        if (!this.isWithinWorkspaceFolders(normalizedPath, workspaceFolders)) {
+          continue;
+        }
+
+        seen.add(normalizedPath);
+        candidates.push({
+          label: path.basename(normalizedPath),
+          description: normalizedPath,
+          targetPath: normalizedPath
+        });
+      }
+
+      this.log(`Everything candidates kept=${candidates.length}`);
+    } catch (error) {
+      this.log(`Everything search failed: ${formatError(error)}`);
+      return this.getFolderCandidatesFromFilesystem(query, workspaceFolders);
+    }
+
     return candidates.sort((left, right) =>
       left.label.localeCompare(right.label) || (left.description ?? "").localeCompare(right.description ?? "")
     );
   }
 
+  private parseEverythingFolderOutput(stdout: string): string[] {
+    return stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .map((line) => {
+        if (line.startsWith('"') && line.endsWith('"')) {
+          return line.slice(1, -1).replace(/""/g, '"');
+        }
+
+        return line;
+      })
+      .map((line) => this.normalizeFolderPath(line.replace(/\r$/, "")));
+  }
+
   private resolveRgCommand(): string {
     const configured = vscode.workspace.getConfiguration("gurepane").get<string>("rgPath", "").trim();
     return configured.length > 0 ? configured : DEFAULT_RG_COMMAND;
+  }
+
+  private resolveEsCommand(): string {
+    const configured = vscode.workspace.getConfiguration("gurepane").get<string>("esPath", "").trim();
+    return configured.length > 0 ? configured : DEFAULT_ES_COMMAND;
+  }
+
+  private getEverythingSearchTerms(value: string): string[] {
+    const trimmed = value.trim();
+    if (trimmed.length === 0) {
+      return [];
+    }
+
+    const terms = trimmed.split(/\s+/).filter((term) => term.length > 0);
+    return terms;
+  }
+
+  private normalizeFolderPath(value: string): string {
+    return value.replace(/\\/g, "/");
+  }
+
+  private isWithinWorkspaceFolders(
+    candidatePath: string,
+    workspaceFolders: readonly vscode.WorkspaceFolder[]
+  ): boolean {
+    const normalizedCandidate = candidatePath.toLowerCase();
+    return workspaceFolders.some((folder) => {
+      const root = this.normalizeFolderPath(folder.uri.fsPath).toLowerCase();
+      return normalizedCandidate === root || normalizedCandidate.startsWith(`${root}/`);
+    });
   }
 
   private async pickHistoryValue(options: {
