@@ -115,7 +115,8 @@
       {
         "command": "gurepane.revealCurrentNode",
         "title": "Reveal Current Node",
-        "category": "Gurepane"
+        "category": "Gurepane",
+        "icon": "$(debug-breakpoint-log)"
       },
       {
         "command": "gurepane.refreshResult",

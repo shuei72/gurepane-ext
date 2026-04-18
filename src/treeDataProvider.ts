@@ -59,12 +59,7 @@ export class GurepaneTreeDataProvider implements vscode.TreeDataProvider<TreeNod
     const item = new vscode.TreeItem(element.result.query, vscode.TreeItemCollapsibleState.Expanded);
     item.id = `result:${element.result.id}`;
     item.description = `${element.result.scopeLabel} | ${element.result.extensionFilter || "(all extensions)"} | ${element.result.nodes.length} node(s)`;
-    item.tooltip = [
-      element.result.query,
-      element.result.scopeLabel,
-      element.result.extensionFilter || "(all extensions)",
-      `${element.result.nodes.length} node(s)`
-    ].join("\n");
+    item.tooltip = "";
     item.iconPath = new vscode.ThemeIcon(isActive ? "zoom-in" : "search");
     item.contextValue = "gurepaneResult";
     return item;
@@ -80,7 +75,7 @@ export class GurepaneTreeDataProvider implements vscode.TreeDataProvider<TreeNod
       vscode.TreeItemCollapsibleState.None
     );
     item.id = `node:${element.resultId}:${element.nodeIndex}:${element.node.relativePath}:${element.node.line}:${element.node.column}`;
-    item.tooltip = `${element.node.filePath}:${element.node.line}:${element.node.column}\n${element.node.text}`;
+    item.tooltip = "";
     item.iconPath = new vscode.ThemeIcon(isCurrent ? "arrow-right" : "list-selection");
     item.contextValue = "gurepaneNode";
     item.command = {
