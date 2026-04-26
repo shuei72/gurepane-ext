@@ -15,12 +15,14 @@ import {
   parseRipgrepOutput
 } from "./searchUtils";
 import { GurepaneTreeDataProvider } from "./treeDataProvider";
-import type { Node, NodeItem, ParsedQuery, Result, ResultItem, TreeNode } from "./types";
+import type { FileItem, Node, NodeItem, ParsedQuery, Result, ResultItem, TreeNode } from "./types";
 import {
   buildDefaultExportUri,
   buildResultExportFileName,
   getDescendantDirectories,
   isDirectory,
+  findRootPath,
+  removeLastFolderSegment,
   serializeResultAsCsv,
   serializeResultAsTsv
 } from "./utils";
@@ -29,6 +31,7 @@ const SEARCH_COMMAND = "gurepane.search";
 const SELECT_RESULT_COMMAND = "gurepane.selectResult";
 const CHANGE_RESULT_QUERY_COMMAND = "gurepane.changeResultQuery";
 const DELETE_RESULT_COMMAND = "gurepane.deleteResult";
+const DELETE_FILE_GROUP_COMMAND = "gurepane.deleteFileGroup";
 const DELETE_NODE_COMMAND = "gurepane.deleteNode";
 const COPY_NODE_COMMAND = "gurepane.copyNode";
 const SAVE_RESULT_AS_CSV_COMMAND = "gurepane.saveResultAsCsv";
@@ -38,12 +41,20 @@ const PREVIOUS_NODE_COMMAND = "gurepane.previousNode";
 const OPEN_NODE_COMMAND = "gurepane.openNode";
 const REVEAL_CURRENT_NODE_COMMAND = "gurepane.revealCurrentNode";
 const REFRESH_COMMAND = "gurepane.refreshResult";
+const FOLDER_PICKER_UP_COMMAND = "gurepane.folderPickerUp";
+const FOLDER_PICKER_ACCEPT_COMMAND = "gurepane.folderPickerAccept";
+const FOLDER_PICKER_ADD_TARGET_COMMAND = "gurepane.folderPickerAddTarget";
+const FOLDER_PICKER_ADD_TARGET_NO_TRANSITION_COMMAND = "gurepane.folderPickerAddTargetNoTransition";
 const VIEW_ID = "gurepane.results";
 const OUTPUT_CHANNEL_NAME = "Gurepane";
 const DEFAULT_RG_COMMAND = "rg";
 const DEFAULT_ES_COMMAND = "es.exe";
 const MAX_BUFFER = 64 * 1024 * 1024;
 const MAX_FOLDER_CANDIDATES = 200;
+const PROCEED_BUTTON: vscode.QuickInputButton = {
+  iconPath: new vscode.ThemeIcon("search"),
+  tooltip: "Proceed to Search"
+};
 const HISTORY_LIMIT = 10;
 const QUERY_HISTORY_KEY = "gurepane.queryHistory";
 const FOLDER_HISTORY_KEY = "gurepane.folderHistory";
@@ -51,10 +62,18 @@ const EXTENSION_HISTORY_KEY = "gurepane.extensionHistory";
 const QUERY_MODE_DELIMITER = ">";
 const EXEC_FILE = promisify(execFile);
 
+type FolderPromptItem = vscode.QuickPickItem & {
+  readonly targetPath: string;
+  isSelectionItem?: boolean;
+};
+
 type FolderCandidateItem = vscode.QuickPickItem & {
   readonly filterText?: string;
   readonly targetPath: string;
+  isSelectionItem?: boolean;
 };
+
+type FolderPickerItem = FolderPromptItem | FolderCandidateItem | vscode.QuickPickItem;
 
 class GurepaneController {
   private readonly outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
@@ -65,8 +84,9 @@ class GurepaneController {
   );
   private treeView: vscode.TreeView<TreeNode> | undefined;
   private activeResultId: string | undefined;
-  private lastFolderPath = "";
   private extensionContext: vscode.ExtensionContext | undefined;
+  private activeFolderQuickPick: vscode.QuickPick<FolderPickerItem> | undefined;
+  private folderPickerResolve?: (value: string | undefined, finalize: boolean, back: boolean, addCurrent: boolean) => void | Promise<void>;
 
   register(context: vscode.ExtensionContext): void {
     this.extensionContext = context;
@@ -89,6 +109,9 @@ class GurepaneController {
       }),
       vscode.commands.registerCommand(DELETE_RESULT_COMMAND, async (item?: ResultItem) => {
         await this.deleteResult(item?.result.id);
+      }),
+      vscode.commands.registerCommand(DELETE_FILE_GROUP_COMMAND, async (item?: FileItem) => {
+        await this.deleteFileGroup(item);
       }),
       vscode.commands.registerCommand(DELETE_NODE_COMMAND, async (item?: NodeItem) => {
         await this.deleteNode(item);
@@ -120,6 +143,47 @@ class GurepaneController {
       }),
       vscode.commands.registerCommand(REFRESH_COMMAND, async (item?: ResultItem) => {
         await this.refreshResult(item);
+      }),
+      vscode.commands.registerCommand(FOLDER_PICKER_UP_COMMAND, () => {
+        if (this.activeFolderQuickPick) {
+          this.activeFolderQuickPick.value = removeLastFolderSegment(this.activeFolderQuickPick.value);
+        }
+      }),
+      vscode.commands.registerCommand(FOLDER_PICKER_ACCEPT_COMMAND, () => {
+        if (this.activeFolderQuickPick && this.folderPickerResolve) {
+          const picked = this.activeFolderQuickPick.selectedItems[0] ?? this.activeFolderQuickPick.activeItems[0];
+          const rawValue = this.activeFolderQuickPick.value.trim();
+          const targetPath = this.getFolderPickerTargetPath(picked, rawValue);
+          void this.folderPickerResolve?.(undefined, true, false, false);
+        }
+      }),
+      vscode.commands.registerCommand(FOLDER_PICKER_ADD_TARGET_COMMAND, () => {
+        if (this.activeFolderQuickPick && this.folderPickerResolve) {
+          const picked = this.activeFolderQuickPick.selectedItems[0] ?? this.activeFolderQuickPick.activeItems[0];
+          const rawValue = this.activeFolderQuickPick.value.trim();
+          const targetPath = this.getFolderPickerTargetPath(picked, rawValue);
+          const isStage2 = this.activeFolderQuickPick.step && this.activeFolderQuickPick.step > 1;
+
+          if (targetPath === undefined) {
+            // Empty input + Shift+Enter = Proceed to extensions if selections exist
+            void this.folderPickerResolve?.(undefined, true, false, false);
+          } else {
+            // Stage 1: Add and stay. Stage 2: Add and return to Stage 1.
+            void this.folderPickerResolve?.(targetPath, false, !!isStage2, true);
+          }
+        }
+      }),
+      vscode.commands.registerCommand(FOLDER_PICKER_ADD_TARGET_NO_TRANSITION_COMMAND, () => {
+        if (this.activeFolderQuickPick && this.folderPickerResolve) {
+          const picked = this.activeFolderQuickPick.selectedItems[0] ?? this.activeFolderQuickPick.activeItems[0];
+          const rawValue = this.activeFolderQuickPick.value.trim();
+          const targetPath = this.getFolderPickerTargetPath(picked, rawValue);
+
+          if (targetPath !== undefined) {
+            // Always pass back=false to stay in the current picker stage
+            void this.folderPickerResolve?.(targetPath, false, false, true);
+          }
+        }
       })
     );
   }
@@ -130,8 +194,8 @@ class GurepaneController {
       return;
     }
 
-    const folderPath = await this.promptSearchFolder();
-    if (folderPath === undefined) {
+    const folderPaths = await this.promptSearchFolder();
+    if (folderPaths === undefined || folderPaths.length === 0) {
       return;
     }
 
@@ -141,9 +205,11 @@ class GurepaneController {
     }
 
     await this.rememberHistory(QUERY_HISTORY_KEY, query.raw);
-    await this.rememberHistory(FOLDER_HISTORY_KEY, folderPath);
+    for (const folderPath of folderPaths) {
+      await this.rememberHistory(FOLDER_HISTORY_KEY, folderPath);
+    }
     await this.rememberHistory(EXTENSION_HISTORY_KEY, extensionFilter);
-    await this.runSearch(query, folderPath, extensionFilter);
+    await this.runSearch(query, folderPaths, extensionFilter);
   }
 
   private async refreshResult(item?: ResultItem): Promise<void> {
@@ -161,7 +227,7 @@ class GurepaneController {
         wholeWord: inferWholeWordFromRaw(result.rawQuery),
         caseMode: inferQueryCaseModeFromRaw(result.rawQuery)
       },
-      result.scopeLabel === "workspace" ? "" : result.scopeLabel,
+      result.folderPaths,
       result.extensionFilter,
       result.id
     );
@@ -229,7 +295,7 @@ class GurepaneController {
     await this.rememberHistory(QUERY_HISTORY_KEY, query.raw);
     await this.runSearch(
       query,
-      result.scopeLabel === "workspace" ? "" : result.scopeLabel,
+      result.folderPaths,
       result.extensionFilter
     );
   }
@@ -248,10 +314,66 @@ class GurepaneController {
 
     this.results.splice(index, 1);
     if (this.activeResultId === resolvedResultId) {
-      this.activeResultId = this.results[Math.max(0, index - 1)]?.id;
+      this.activeResultId = (this.results[index] ?? this.results[index - 1])?.id;
     }
 
     this.provider.refresh();
+
+    const activeResult = this.getActiveResult();
+    if (activeResult) {
+      if (activeResult.currentNodeIndex >= 0) {
+        await this.revealCurrentNode(activeResult);
+      } else {
+        await this.treeView?.reveal({ kind: "result", result: activeResult }, { focus: true, select: true });
+      }
+    }
+  }
+
+  private async deleteFileGroup(item?: FileItem): Promise<void> {
+    if (!item) {
+      return;
+    }
+
+    const result = this.results.find((candidate) => candidate.id === item.resultId);
+    if (!result) {
+      return;
+    }
+
+    const matchingIndices: number[] = [];
+    result.nodes.forEach((node, nodeIndex) => {
+      if (node.relativePath === item.relativePath) {
+        matchingIndices.push(nodeIndex);
+      }
+    });
+
+    if (matchingIndices.length === 0) {
+      return;
+    }
+
+    const firstRemovedIndex = matchingIndices[0];
+    const lastRemovedIndex = matchingIndices[matchingIndices.length - 1];
+    const removedCount = matchingIndices.length;
+    const currentIndex = result.currentNodeIndex;
+    const currentNodeWasRemoved = currentIndex >= firstRemovedIndex && currentIndex <= lastRemovedIndex;
+
+    for (const nodeIndex of [...matchingIndices].reverse()) {
+      result.nodes.splice(nodeIndex, 1);
+    }
+
+    if (result.nodes.length === 0) {
+      await this.deleteResult(result.id);
+      return;
+    }
+
+    if (currentNodeWasRemoved) {
+      result.currentNodeIndex = Math.min(firstRemovedIndex, result.nodes.length - 1);
+    } else if (currentIndex > lastRemovedIndex) {
+      result.currentNodeIndex = currentIndex - removedCount;
+    }
+
+    this.activeResultId = result.id;
+    this.provider.refresh();
+    await this.revealCurrentNode(result);
   }
 
   private async deleteNode(item?: NodeItem): Promise<void> {
@@ -279,6 +401,7 @@ class GurepaneController {
 
     this.activeResultId = result.id;
     this.provider.refresh();
+    await this.revealCurrentNode(result);
   }
 
   private async copyNode(item?: NodeItem): Promise<void> {
@@ -341,7 +464,7 @@ class GurepaneController {
 
   private async runSearch(
     query: ParsedQuery,
-    folderPath: string,
+    folderPaths: string[],
     extensionFilter: string,
     replaceResultId?: string
   ): Promise<void> {
@@ -352,7 +475,8 @@ class GurepaneController {
     }
 
     const rgCommand = this.resolveRgCommand();
-    const targets = this.resolveSearchTargets(folderPath, workspaceFolders);
+    const targets = this.resolveSearchTargets(folderPaths, workspaceFolders);
+    const excludePatterns = this.resolveExcludePatterns();
 
     if (targets.length === 0) {
       void vscode.window.showWarningMessage("No searchable folder was resolved.");
@@ -365,6 +489,7 @@ class GurepaneController {
       "never",
       ...buildQueryModeArgs(query),
       ...buildExtensionArgs(extensionFilter),
+      ...excludePatterns.flatMap((p) => ["-g", `!${p}`]),
       query.pattern,
       ...targets
     ];
@@ -381,7 +506,7 @@ class GurepaneController {
       stderr = result.stderr;
     } catch (error) {
       if (isRipgrepNoResults(error)) {
-        this.addResult(query, folderPath, extensionFilter, [], replaceResultId);
+        this.addResult(query, folderPaths, extensionFilter, [], replaceResultId);
         await this.focusPanel();
         void vscode.window.showInformationMessage(`No matches for "${query.raw}".`);
         return;
@@ -398,7 +523,7 @@ class GurepaneController {
     }
 
     const nodes = parseRipgrepOutput(stdout);
-    const result = this.addResult(query, folderPath, extensionFilter, nodes, replaceResultId);
+    const result = this.addResult(query, folderPaths, extensionFilter, nodes, replaceResultId);
     await this.focusPanel();
     if (result.currentNodeIndex >= 0) {
       await this.openNode(result.id, result.currentNodeIndex, false);
@@ -409,18 +534,30 @@ class GurepaneController {
 
   private addResult(
     query: ParsedQuery,
-    folderPath: string,
+    folderPaths: string[],
     extensionFilter: string,
     nodes: Node[],
     replaceResultId?: string
   ): Result {
+    const folderPathsNormalized = folderPaths.map(p => this.normalizeFolderPath(p));
+    const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
+    const isExternal = folderPathsNormalized.some(p => p.trim().length > 0 && !workspaceFolders.some((folder) => {
+      const root = this.normalizeFolderPath(folder.uri.fsPath).toLowerCase();
+      const target = p.toLowerCase();
+      return target === root || target.startsWith(`${root}/`);
+    }));
+
     const result: Result = {
       id: replaceResultId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       query: query.pattern,
       rawQuery: query.raw,
-      scopeLabel: folderPath.trim().length > 0 ? folderPath : "workspace",
+      folderPaths: folderPathsNormalized,
+      scopeLabel: folderPathsNormalized.length === 0 || (folderPathsNormalized.length === 1 && folderPathsNormalized[0].trim() === "")
+        ? "workspace"
+        : folderPathsNormalized.join(", "),
       extensionFilter,
       createdAt: Date.now(),
+      isExternal,
       nodes,
       currentNodeIndex: nodes.length > 0 ? 0 : -1
     };
@@ -463,22 +600,173 @@ class GurepaneController {
     return normalizeExtensionFilter(value);
   }
 
-  private async promptSearchFolder(): Promise<string | undefined> {
-    const selected = await this.pickHistoryValue({
-      historyKey: FOLDER_HISTORY_KEY,
-      placeHolder: "Recent folders",
-      createNewLabel: "Enter folder",
-      emptyLabel: "Workspace",
-      iconId: "folder"
-    });
-    const initialValue = selected ?? "";
-    const picked = await this.pickFolderCandidate(initialValue);
-    if (picked === undefined) {
-      return undefined;
-    }
+  private async promptSearchFolder(): Promise<string[] | undefined> {
+    const workspaceFolders = vscode.workspace.workspaceFolders?.filter((folder) => folder.uri.scheme === "file") ?? [];
+    const firstWorkspacePath = workspaceFolders.length > 0 ? this.normalizeFolderPath(workspaceFolders[0].uri.fsPath) : "";
+    const currentFolderPath = this.getCurrentEditorFolderPath();
+    const selectedPaths = new Set<string>();
+    let initialStage2Value = "";
 
-    this.lastFolderPath = picked;
-    return picked;
+    return await new Promise<string[] | undefined>((resolve) => {
+      const showStage1 = () => {
+        const quickPick = vscode.window.createQuickPick<FolderPickerItem>();
+        quickPick.placeholder = "Choose folder source";
+        quickPick.step = 1;
+        quickPick.totalSteps = 2;
+        let isTransitioning = false;
+
+        this.activeFolderQuickPick = quickPick;
+        this.folderPickerResolve = async (val, finalize, back, addCurrent) => {
+          if (addCurrent && val !== undefined) {
+            const pathToAdd = (val === "" && firstWorkspacePath) ? firstWorkspacePath : val;
+            if (pathToAdd !== "") {
+              selectedPaths.add(pathToAdd);
+              quickPick.value = "";
+              updateItems();
+            }
+          }
+
+          if (finalize) {
+            if (val === undefined && selectedPaths.size > 0) {
+              isTransitioning = true;
+              quickPick.hide();
+              resolve(Array.from(selectedPaths));
+              return;
+            }
+
+            isTransitioning = true;
+            quickPick.hide();
+            const startValue = (val === "" && firstWorkspacePath) ? firstWorkspacePath : (val ?? initialStage2Value);
+            const result = await this.pickFolderCandidate(startValue, selectedPaths);
+            if (result === "BACK") {
+              initialStage2Value = ""; // 戻ってきたときは入力をクリア
+              showStage1();
+            } else {
+              resolve(result);
+            }
+          } else if (val !== undefined) {
+            // Shift + Enter: [Workspace] の場合はルートパスを、それ以外はそのパスを追加する
+            const pathToAdd = (val === "" && firstWorkspacePath) ? firstWorkspacePath : val;
+            if (pathToAdd !== "") {
+              selectedPaths.add(pathToAdd);
+            }
+
+            quickPick.value = "";
+            quickPick.title = `Choose folder source (${selectedPaths.size} selected)`;
+            quickPick.placeholder = `Selected: ${Array.from(selectedPaths).join(", ")}`;
+            updateItems();
+          }
+        }
+
+        void vscode.commands.executeCommand("setContext", "gurepaneFolderPickerActive", true);
+
+        const updateItems = () => {
+          quickPick.buttons = selectedPaths.size > 0 ? [PROCEED_BUTTON] : [];
+          const history = this.getHistory(FOLDER_HISTORY_KEY);
+          const selectedItems: FolderPromptItem[] = Array.from(selectedPaths).map(p => ({
+            label: `$(check) ${path.basename(p) || p}`,
+            description: p,
+            targetPath: p,
+            isSelectionItem: true,
+            buttons: [
+              {
+                iconPath: new vscode.ThemeIcon("trash"),
+                tooltip: "Remove from selection"
+              }
+            ]
+          }));
+
+          quickPick.items = [
+            ...(currentFolderPath
+              ? [{
+                  label: "[Current Folder]",
+                  description: currentFolderPath,
+                  targetPath: currentFolderPath
+                }]
+              : []),
+            {
+              label: "[Workspace]",
+              description: firstWorkspacePath || "Search whole workspace",
+              targetPath: ""
+            },
+            ...history.map((value) => ({
+              label: value.length > 0 ? value : "(empty)",
+              description: value.length === 0 ? "workspace" : undefined,
+              targetPath: value,
+              buttons: [
+                {
+                  iconPath: new vscode.ThemeIcon("close"),
+                  tooltip: "Remove from history"
+                }
+              ]
+            })),
+            ...this.buildSelectedFolderSection(selectedPaths)
+          ];
+        };
+
+        updateItems();
+
+        const buttonDisposable = quickPick.onDidTriggerButton((button) => {
+          if (button === PROCEED_BUTTON) {
+            void this.folderPickerResolve?.(undefined, true, false, false);
+          }
+        });
+
+        const triggerDisposable = quickPick.onDidTriggerItemButton(async (e) => {
+          const item = e.item as FolderPromptItem;
+          if (item.isSelectionItem) {
+            selectedPaths.delete(item.targetPath);
+            if (selectedPaths.size > 0) {
+              quickPick.title = `Choose folder source (${selectedPaths.size} selected)`;
+              quickPick.placeholder = `Selected: ${Array.from(selectedPaths).join(", ")}`;
+            } else {
+              quickPick.title = "";
+              quickPick.placeholder = "Choose folder source";
+            }
+          } else if ("targetPath" in e.item) {
+            const targetPath = e.item.targetPath;
+            const history = this.getHistory(FOLDER_HISTORY_KEY);
+            const nextHistory = history.filter((v) => v !== targetPath);
+            await this.extensionContext?.globalState.update(FOLDER_HISTORY_KEY, nextHistory);
+          }
+          updateItems();
+        });
+
+        const acceptDisposable = quickPick.onDidAccept(async () => {
+          const picked = quickPick.selectedItems[0];
+          if (!picked) {
+            if (quickPick.value.trim() === "" && selectedPaths.size > 0) {
+              void this.folderPickerResolve?.(undefined, true, false, false);
+            }
+            return;
+          }
+          const targetPath = this.getFolderPickerTargetPath(picked, quickPick.value);
+          if (targetPath === undefined) {
+            return;
+          }
+          void this.folderPickerResolve?.(targetPath, true, false, false);
+        });
+
+        const hideDisposable = quickPick.onDidHide(() => {
+          if (!isTransitioning) {
+            void vscode.commands.executeCommand("setContext", "gurepaneFolderPickerActive", false);
+            this.activeFolderQuickPick = undefined;
+            this.folderPickerResolve = undefined;
+            resolve(undefined);
+          }
+
+          buttonDisposable.dispose();
+          triggerDisposable.dispose();
+          acceptDisposable.dispose();
+          hideDisposable.dispose();
+          quickPick.dispose();
+        });
+
+        quickPick.show();
+      };
+
+      showStage1();
+    });
   }
 
   private async promptQuery(initialValue = ""): Promise<ParsedQuery | undefined> {
@@ -551,19 +839,46 @@ class GurepaneController {
       return;
     }
 
+    const nodeCount = result.nodes.filter(n => n.filePath === node.filePath).length;
+    const rootPath = findRootPath(node.filePath, result.folderPaths);
+    const fileItem: FileItem = {
+      kind: "file",
+      resultId: result.id,
+      relativePath: node.relativePath,
+      filePath: node.filePath,
+      nodeCount,
+      rootPath
+    };
+    const nodeItem: NodeItem = {
+      kind: "node",
+      resultId: result.id,
+      nodeIndex: result.currentNodeIndex,
+      node
+    };
+
     await this.treeView.reveal(
       {
-        kind: "node",
-        resultId: result.id,
-        nodeIndex: result.currentNodeIndex,
-        node
+        kind: "result",
+        result
       },
       {
         focus: false,
-        select: true,
+        select: false,
         expand: true
       }
     );
+
+    await this.treeView.reveal(fileItem, {
+      focus: false,
+      select: false,
+      expand: true
+    });
+
+    await this.treeView.reveal(nodeItem, {
+      focus: true,
+      select: true,
+      expand: false
+    });
   }
 
   private async openNodeDocument(node: Node): Promise<void> {
@@ -588,21 +903,29 @@ class GurepaneController {
   }
 
   private resolveSearchTargets(
-    folderPath: string,
+    folderPaths: string[],
     workspaceFolders: readonly vscode.WorkspaceFolder[]
   ): string[] {
     const fileWorkspaceFolders = workspaceFolders.filter((folder) => folder.uri.scheme === "file");
-    if (folderPath.trim().length === 0) {
+    if (folderPaths.length === 0 || (folderPaths.length === 1 && folderPaths[0].trim().length === 0)) {
       return fileWorkspaceFolders.map((folder) => folder.uri.fsPath);
     }
 
-    if (path.isAbsolute(folderPath)) {
-      return isDirectory(folderPath) ? [folderPath] : [];
-    }
+    const resolved = new Set<string>();
+    for (const p of folderPaths) {
+      const trimmed = p.trim();
+      if (!trimmed) continue;
 
-    return fileWorkspaceFolders
-      .map((folder) => path.join(folder.uri.fsPath, folderPath))
-      .filter((candidate, index, all) => isDirectory(candidate) && all.indexOf(candidate) === index);
+      if (path.isAbsolute(trimmed)) {
+        if (isDirectory(trimmed)) resolved.add(trimmed);
+      } else {
+        for (const ws of fileWorkspaceFolders) {
+          const candidate = path.join(ws.uri.fsPath, trimmed);
+          if (isDirectory(candidate)) resolved.add(candidate);
+        }
+      }
+    }
+    return Array.from(resolved);
   }
 
   private getCurrentEditorFolderPath(): string | undefined {
@@ -614,38 +937,182 @@ class GurepaneController {
     return path.dirname(document.uri.fsPath).replace(/\\/g, "/");
   }
 
-  private async pickFolderCandidate(initialValue: string): Promise<string | undefined> {
+  private resolveRgCommand(): string {
+    const configured = vscode.workspace.getConfiguration("gurepane").get<string>("rgPath", "").trim();
+    return configured.length > 0 ? configured : DEFAULT_RG_COMMAND;
+  }
+
+  private buildSelectedFolderSection(selectedPaths: Set<string>): FolderPickerItem[] {
+    if (selectedPaths.size === 0) {
+      return [];
+    }
+
+    const selectedItems: FolderPickerItem[] = Array.from(selectedPaths).map((p) => ({
+      label: `$(check) ${path.basename(p) || p}`,
+      description: p,
+      targetPath: p,
+      alwaysShow: true,
+      isSelectionItem: true,
+      buttons: [
+        {
+          iconPath: new vscode.ThemeIcon("trash"),
+          tooltip: "Remove from selection"
+        }
+      ]
+    }));
+
+    return [
+      { label: "Selected Folders", kind: vscode.QuickPickItemKind.Separator },
+      ...selectedItems
+    ];
+  }
+
+  private appendSelectedFolderSection(
+    items: FolderCandidateItem[],
+    selectedPaths: Set<string>
+  ): FolderPickerItem[] {
+    return [...items, ...this.buildSelectedFolderSection(selectedPaths)];
+  }
+
+  private resolveEsCommand(): string {
+    const configured = vscode.workspace.getConfiguration("gurepane").get<string>("esPath", "").trim();
+    return configured.length > 0 ? configured : DEFAULT_ES_COMMAND;
+  }
+
+  private resolveUseEs(): boolean {
+    return vscode.workspace.getConfiguration("gurepane").get<boolean>("useEs", true);
+  }
+
+  private resolveExcludePatterns(): string[] {
+    return vscode.workspace.getConfiguration("gurepane").get<string[]>("excludePatterns", ["node_modules", ".git"]);
+  }
+
+  private getFolderPickerTargetPath(
+    picked: FolderPickerItem | undefined,
+    rawValue: string
+  ): string | undefined {
+    if (picked && "targetPath" in picked) {
+      return picked.targetPath;
+    }
+
+    const trimmed = rawValue.trim();
+    return trimmed.length > 0 ? this.normalizeFolderPath(trimmed) : undefined;
+  }
+
+  private async pickFolderCandidate(initialValue: string, selectedPaths: Set<string> = new Set()): Promise<string[] | "BACK" | undefined> {
     const workspaceFolders = vscode.workspace.workspaceFolders?.filter((folder) => folder.uri.scheme === "file") ?? [];
     if (workspaceFolders.length === 0) {
       return undefined;
     }
 
-    return await new Promise<string | undefined>((resolve) => {
-      const quickPick = vscode.window.createQuickPick<FolderCandidateItem>();
-      let accepted = false;
+    const useEs = this.resolveUseEs();
+    const esCommand = this.resolveEsCommand();
+    const esAvailable = useEs
+      ? await EXEC_FILE(esCommand, ["-h"], { windowsHide: true }).then(() => true).catch(() => false)
+      : false;
+
+    if (!esAvailable && initialValue === "") {
+      const currentFolder = this.getCurrentEditorFolderPath();
+      const defaultUri = currentFolder ? vscode.Uri.file(currentFolder) : workspaceFolders[0]?.uri;
+
+      const selected = await vscode.window.showOpenDialog({
+        canSelectFiles: false,
+        canSelectFolders: true,
+        canSelectMany: true,
+        openLabel: "Select Folder to Search",
+        defaultUri
+      });
+      const picked = selected ? selected.map(uri => this.normalizeFolderPath(uri.fsPath)) : [];
+      picked.forEach(p => selectedPaths.add(p));
+      return selectedPaths.size > 0 ? Array.from(selectedPaths) : undefined;
+    }
+
+    return await new Promise<string[] | "BACK" | undefined>(async (resolve) => {
+      const quickPick = vscode.window.createQuickPick<FolderPickerItem>();
+      let acceptedValue: string[] | "BACK" | undefined = undefined;
+      let lastRequestId = 0;
       let disposed = false;
 
       quickPick.title = "Choose a folder";
       quickPick.placeholder = "Type a folder name or path to search Everything";
+      quickPick.step = 2;
+      quickPick.totalSteps = 2;
       quickPick.matchOnDescription = true;
       quickPick.matchOnDetail = true;
       quickPick.canSelectMany = false;
-      quickPick.value = initialValue.trim();
+      const history = this.getHistory(FOLDER_HISTORY_KEY);
+
+      this.activeFolderQuickPick = quickPick;
+
+      const updateHeader = () => {
+        const buttons: vscode.QuickInputButton[] = [vscode.QuickInputButtons.Back];
+        if (selectedPaths.size > 0) {
+          buttons.push(PROCEED_BUTTON);
+        }
+        quickPick.buttons = buttons;
+
+        if (selectedPaths.size > 0) {
+          quickPick.title = `Choose folders (${selectedPaths.size} selected)`;
+          quickPick.placeholder = `Selected: ${Array.from(selectedPaths).join(", ")}`;
+        } else {
+          quickPick.title = "Choose a folder";
+          quickPick.placeholder = "Type a folder name or path to search Everything";
+        }
+      };
+
+      updateHeader();
+
+      this.folderPickerResolve = (val, finalize, back, addCurrent) => {
+        if (addCurrent && val) {
+          selectedPaths.add(val);
+        }
+
+        if (back) {
+          acceptedValue = "BACK";
+          quickPick.hide();
+        } else if (finalize) {
+          acceptedValue = selectedPaths.size > 0 ? Array.from(selectedPaths) : undefined;
+          quickPick.hide();
+        } else {
+          quickPick.value = "";
+          updateHeader();
+          void setCandidates("");
+        }
+      };
+      await vscode.commands.executeCommand("setContext", "gurepaneFolderPickerActive", true);
+
+      const buttonDisposable = quickPick.onDidTriggerButton(button => {
+        if (button === vscode.QuickInputButtons.Back) {
+          void this.folderPickerResolve?.(undefined, false, true, false);
+        } else if (button === PROCEED_BUTTON) {
+          void this.folderPickerResolve?.(undefined, true, false, false);
+        }
+      });
 
       const setCandidates = async (rawQuery: string) => {
         const query = rawQuery.trim();
+        const requestId = ++lastRequestId;
         quickPick.busy = true;
 
         try {
-          const candidates = query.length > 0
-            ? await this.getFolderCandidatesFromEverything(query, workspaceFolders)
+          let baseCandidates: FolderCandidateItem[] = query.length > 0
+            ? await this.getFolderCandidatesFromEverything(query, workspaceFolders, history)
             : this.getInitialFolderCandidates(workspaceFolders);
 
-          if (disposed) {
+          if (disposed || requestId !== lastRequestId) {
             return;
           }
 
-          const preferredItem = this.pickBestFolderCandidate(query, candidates);
+          if (query.includes("\\")) {
+            baseCandidates = baseCandidates.map((c) => ({
+              ...c,
+              description: c.description?.replace(/\//g, "\\")
+            }));
+          }
+
+          const candidates: FolderPickerItem[] = this.appendSelectedFolderSection(baseCandidates, selectedPaths);
+
+          const preferredItem = this.pickBestFolderCandidate(query, baseCandidates);
           quickPick.selectedItems = [];
           quickPick.items = candidates;
           quickPick.activeItems = preferredItem ? [preferredItem] : [];
@@ -660,42 +1127,70 @@ class GurepaneController {
         void setCandidates(value);
       });
 
+      const triggerDisposable = quickPick.onDidTriggerItemButton((e) => {
+        const item = e.item as FolderCandidateItem;
+        if (item.isSelectionItem) {
+          selectedPaths.delete(item.targetPath);
+          updateHeader();
+          void setCandidates(quickPick.value);
+        }
+      });
+
       const acceptDisposable = quickPick.onDidAccept(() => {
-        accepted = true;
         const picked = quickPick.selectedItems[0] ?? quickPick.activeItems[0];
-        cleanup();
-        resolve(picked?.targetPath);
+        const currentValue = this.normalizeFolderPath(quickPick.value.trim());
+
+        if (picked && "targetPath" in picked) {
+          // 入力内容と候補が完全に一致している状態で Enter が押されたら確定とする
+          if (currentValue === picked.targetPath) {
+            void this.folderPickerResolve?.(picked.targetPath, true, false, true);
+          } else {
+            // それ以外（補完目的）なら入力欄に反映する
+            quickPick.value = picked.targetPath;
+            quickPick.activeItems = [];
+          }
+        } else if (currentValue.length > 0) {
+          // 候補がない（Everythingの結果が空）場合でも、入力があればそのパスで確定する
+          void this.folderPickerResolve?.(currentValue, true, false, true);
+        } else if (selectedPaths.size > 0) {
+          void this.folderPickerResolve?.(undefined, true, false, false);
+        }
       });
 
       const hideDisposable = quickPick.onDidHide(() => {
-        if (accepted) {
-          return;
-        }
-
         cleanup();
-        resolve(undefined);
+        resolve(acceptedValue);
       });
 
       const cleanup = () => {
         disposed = true;
+        this.activeFolderQuickPick = undefined;
+        this.folderPickerResolve = undefined;
+        void vscode.commands.executeCommand("setContext", "gurepaneFolderPickerActive", false);
         valueChangeDisposable.dispose();
+        buttonDisposable.dispose();
+        triggerDisposable.dispose();
         acceptDisposable.dispose();
         hideDisposable.dispose();
         quickPick.dispose();
       };
 
-      void setCandidates(quickPick.value);
+      const startValue = initialValue.trim();
+      void setCandidates(startValue);
       quickPick.show();
+      quickPick.value = startValue;
     });
   }
 
   private getInitialFolderCandidates(
     workspaceFolders: readonly vscode.WorkspaceFolder[]
   ): FolderCandidateItem[] {
+    const history = this.getHistory(FOLDER_HISTORY_KEY);
     return workspaceFolders.map((folder) => {
       const targetPath = this.normalizeFolderPath(folder.uri.fsPath);
+      const isInHistory = history.includes(targetPath);
       return {
-        label: folder.name,
+        label: `${isInHistory ? "$(history)" : "$(folder)"} ${folder.name}`,
         description: targetPath,
         targetPath
       };
@@ -745,34 +1240,50 @@ class GurepaneController {
       return undefined;
     }
 
-    const normalizedQuery = query.trim().toLowerCase();
-    if (normalizedQuery.length === 0) {
+    const normalizedQuery = query.trim().toLowerCase().replace(/\\/g, "/");
+    const queryTerms = normalizedQuery.split(/\s+/).filter(t => t.length > 0);
+
+    if (queryTerms.length === 0) {
       return candidates[0];
     }
 
     return (
-      candidates.find((candidate) => (candidate.description ?? "").toLowerCase() === normalizedQuery) ??
-      candidates.find((candidate) => (candidate.description ?? "").toLowerCase().includes(normalizedQuery)) ??
-      candidates[0]
+      candidates.find((candidate) => (candidate.description ?? "").toLowerCase() === normalizedQuery) ||
+      candidates.find((candidate) => {
+        const desc = (candidate.description ?? "").toLowerCase();
+        return queryTerms.every(term => desc.includes(term));
+      })
     );
   }
 
   private async getFolderCandidatesFromEverything(
     query: string,
-    workspaceFolders: readonly vscode.WorkspaceFolder[]
+    workspaceFolders: readonly vscode.WorkspaceFolder[],
+    history: string[]
   ): Promise<FolderCandidateItem[]> {
+    if (!this.resolveUseEs()) {
+      return [];
+    }
+
+    const isAbsolutePathQuery = path.isAbsolute(query);
     const esCommand = this.resolveEsCommand();
-    const searchTerms = this.getEverythingSearchTerms(query);
+    const excludePatterns = this.resolveExcludePatterns();
+    const workspacePaths = workspaceFolders.map(f => this.normalizeFolderPath(f.uri.fsPath).toLowerCase());
+
+    // Everything (es.exe) は Windows 形式の \ を期待するため変換して渡す
+    const searchTerms = (isAbsolutePathQuery ? [query] : this.getEverythingSearchTerms(query))
+      .map(term => term.replace(/\//g, "\\"));
+    const esExcludeTerms = excludePatterns.map((p) => `!${p}`);
     const seen = new Set<string>();
     const candidates: FolderCandidateItem[] = [];
-    const args = ["/ad", "-p", "-s", "-n", String(MAX_FOLDER_CANDIDATES), ...searchTerms];
+    const args = ["/ad", "-p", "-sort-path", "-n", String(MAX_FOLDER_CANDIDATES), ...searchTerms, ...esExcludeTerms];
 
     this.log(`Everything search command=${esCommand} args=${args.map((arg) => JSON.stringify(arg)).join(" ")}`);
 
     try {
       if (searchTerms.length === 0) {
         this.log("Everything search skipped because there are no search terms.");
-        return this.getFolderCandidatesFromFilesystem(query, workspaceFolders);
+        return [];
       }
 
       const result = await EXEC_FILE(
@@ -793,13 +1304,27 @@ class GurepaneController {
           continue;
         }
 
-        if (!this.isWithinWorkspaceFolders(normalizedPath, workspaceFolders)) {
+        // 絶対パス入力、または入力クエリ自体にパス区切りやスペースが含まれる場合は
+        // ユーザーが場所を特定しようとしていると判断し、ワークスペース外でも候補に含める
+        if (
+          !isAbsolutePathQuery &&
+          !query.includes("/") &&
+          !query.includes("\\") &&
+          !query.includes(" ") &&
+          !this.isWithinAllowedRoots(normalizedPath, workspaceFolders, history)
+        ) {
           continue;
         }
 
+        const isWorkspace = workspacePaths.some(ws => normalizedPath.toLowerCase().startsWith(ws));
+        const isHistory = history.includes(normalizedPath);
+        let icon = "$(file-directory)";
+        if (isWorkspace) icon = "$(folder)";
+        if (isHistory) icon = "$(history)";
+
         seen.add(normalizedPath);
         candidates.push({
-          label: path.basename(normalizedPath),
+          label: `${icon} ${path.basename(normalizedPath)}`,
           description: normalizedPath,
           targetPath: normalizedPath
         });
@@ -808,12 +1333,18 @@ class GurepaneController {
       this.log(`Everything candidates kept=${candidates.length}`);
     } catch (error) {
       this.log(`Everything search failed: ${formatError(error)}`);
-      return this.getFolderCandidatesFromFilesystem(query, workspaceFolders);
+      return [];
     }
 
-    return candidates.sort((left, right) =>
-      left.label.localeCompare(right.label) || (left.description ?? "").localeCompare(right.description ?? "")
-    );
+    return candidates.sort((left, right) => {
+      // 1. ワークスペース内を最優先
+      const leftInWs = workspacePaths.some(ws => left.targetPath.toLowerCase().startsWith(ws));
+      const rightInWs = workspacePaths.some(ws => right.targetPath.toLowerCase().startsWith(ws));
+      if (leftInWs !== rightInWs) return leftInWs ? -1 : 1;
+
+      // 2. パスの短さ（浅い階層）を優先
+      return left.targetPath.length - right.targetPath.length || left.targetPath.localeCompare(right.targetPath);
+    });
   }
 
   private parseEverythingFolderOutput(stdout: string): string[] {
@@ -831,16 +1362,6 @@ class GurepaneController {
       .map((line) => this.normalizeFolderPath(line.replace(/\r$/, "")));
   }
 
-  private resolveRgCommand(): string {
-    const configured = vscode.workspace.getConfiguration("gurepane").get<string>("rgPath", "").trim();
-    return configured.length > 0 ? configured : DEFAULT_RG_COMMAND;
-  }
-
-  private resolveEsCommand(): string {
-    const configured = vscode.workspace.getConfiguration("gurepane").get<string>("esPath", "").trim();
-    return configured.length > 0 ? configured : DEFAULT_ES_COMMAND;
-  }
-
   private getEverythingSearchTerms(value: string): string[] {
     const trimmed = value.trim();
     if (trimmed.length === 0) {
@@ -855,13 +1376,29 @@ class GurepaneController {
     return value.replace(/\\/g, "/");
   }
 
-  private isWithinWorkspaceFolders(
+  private isWithinAllowedRoots(
     candidatePath: string,
-    workspaceFolders: readonly vscode.WorkspaceFolder[]
+    workspaceFolders: readonly vscode.WorkspaceFolder[],
+    history: string[]
   ): boolean {
     const normalizedCandidate = candidatePath.toLowerCase();
-    return workspaceFolders.some((folder) => {
+
+    // 1. ワークスペース内かチェック
+    const isInWorkspace = workspaceFolders.some((folder) => {
       const root = this.normalizeFolderPath(folder.uri.fsPath).toLowerCase();
+      return normalizedCandidate === root || normalizedCandidate.startsWith(`${root}/`);
+    });
+
+    if (isInWorkspace) {
+      return true;
+    }
+
+    // 2. 過去の検索履歴（絶対パス）に含まれるフォルダ配下かチェック
+    return history.some((historyPath) => {
+      if (!historyPath || !path.isAbsolute(historyPath)) {
+        return false;
+      }
+      const root = this.normalizeFolderPath(historyPath).toLowerCase();
       return normalizedCandidate === root || normalizedCandidate.startsWith(`${root}/`);
     });
   }
@@ -879,28 +1416,67 @@ class GurepaneController {
     }
 
     await vscode.commands.executeCommand("setContext", "gurepaneHistoryPickerVisible", true);
-    try {
-      const picked = await vscode.window.showQuickPick(
-        [
+    return await new Promise<string | undefined>((resolve) => {
+      const quickPick = vscode.window.createQuickPick<vscode.QuickPickItem & { value?: string }>();
+      quickPick.placeholder = options.placeHolder;
+      let accepted = false;
+
+      const updateItems = () => {
+        const currentHistory = this.getHistory(options.historyKey);
+        quickPick.items = [
           {
             label: `$(${options.iconId}) ${options.createNewLabel}`,
-            value: undefined as string | undefined
+            value: undefined
           },
-          ...history.map((value) => ({
+          ...currentHistory.map((value) => ({
             label: value.length > 0 ? value : (options.emptyLabel ?? "(empty)"),
             description: value.length === 0 ? "recent" : undefined,
-            value
+            value,
+            buttons: [
+              {
+                iconPath: new vscode.ThemeIcon("close"),
+                tooltip: "Remove from history"
+              }
+            ]
           }))
-        ],
-        {
-          placeHolder: options.placeHolder
-        }
-      );
+        ];
+      };
 
-      return picked?.value;
-    } finally {
-      await vscode.commands.executeCommand("setContext", "gurepaneHistoryPickerVisible", false);
-    }
+      updateItems();
+
+      const triggerDisposable = quickPick.onDidTriggerItemButton(async (e) => {
+        const history = this.getHistory(options.historyKey);
+        const nextHistory = history.filter((v) => v !== e.item.value);
+        await this.extensionContext?.globalState.update(options.historyKey, nextHistory);
+
+        const updatedHistory = this.getHistory(options.historyKey);
+        if (updatedHistory.length === 0) {
+          quickPick.hide();
+        } else {
+          updateItems();
+        }
+      });
+
+      const acceptDisposable = quickPick.onDidAccept(() => {
+        const picked = quickPick.selectedItems[0];
+        accepted = true;
+        quickPick.hide();
+        resolve(picked?.value);
+      });
+
+      const hideDisposable = quickPick.onDidHide(() => {
+        void vscode.commands.executeCommand("setContext", "gurepaneHistoryPickerVisible", false);
+        if (!accepted) {
+          resolve(undefined);
+        }
+        triggerDisposable.dispose();
+        acceptDisposable.dispose();
+        hideDisposable.dispose();
+        quickPick.dispose();
+      });
+
+      quickPick.show();
+    });
   }
 
   private getHistory(key: string): string[] {
@@ -949,7 +1525,10 @@ class GurepaneController {
       }
 
       inputBox.show();
-      inputBox.valueSelection = [options.value.length, options.value.length];
+      // show の直後に selection を設定することで全選択を回避し末尾にカーソルを置く
+      if (options.value.length > 0) {
+        inputBox.valueSelection = [options.value.length, options.value.length];
+      }
     });
   }
 

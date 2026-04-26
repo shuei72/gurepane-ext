@@ -16,9 +16,11 @@ export type Result = {
   readonly id: string;
   readonly query: string;
   readonly rawQuery: string;
+  readonly folderPaths: string[];
   readonly scopeLabel: string;
   readonly extensionFilter: string;
   readonly createdAt: number;
+  readonly isExternal?: boolean;
   readonly nodes: Node[];
   currentNodeIndex: number;
 };
@@ -42,6 +44,15 @@ export type ResultItem = {
   readonly result: Result;
 };
 
+export type FileItem = {
+  readonly kind: "file";
+  readonly resultId: string;
+  readonly relativePath: string;
+  readonly filePath: string;
+  readonly nodeCount: number;
+  readonly rootPath?: string;
+};
+
 export type NodeItem = {
   readonly kind: "node";
   readonly resultId: string;
@@ -49,4 +60,4 @@ export type NodeItem = {
   readonly node: Node;
 };
 
-export type TreeNode = ResultItem | NodeItem;
+export type TreeNode = ResultItem | FileItem | NodeItem;

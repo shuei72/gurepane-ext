@@ -86,6 +86,12 @@
         "icon": "$(trash)"
       },
       {
+        "command": "gurepane.deleteFileGroup",
+        "title": "Delete File Group",
+        "category": "Gurepane",
+        "icon": "$(trash)"
+      },
+      {
         "command": "gurepane.saveResultAsCsv",
         "title": "Export Result as CSV",
         "category": "Gurepane"
@@ -123,6 +129,26 @@
         "title": "Refresh",
         "category": "Gurepane",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "gurepane.folderPickerUp",
+        "title": "Go to Parent Folder",
+        "category": "Gurepane"
+      },
+      {
+        "command": "gurepane.folderPickerAccept",
+        "title": "Accept Folder Selection",
+        "category": "Gurepane"
+      },
+      {
+        "command": "gurepane.folderPickerAddTarget",
+        "title": "Add Folder to Search Targets",
+        "category": "Gurepane"
+      },
+      {
+        "command": "gurepane.folderPickerAddTargetNoTransition",
+        "title": "Add Folder and Stay",
+        "category": "Gurepane"
       }
     ],
     "viewsContainers": {
@@ -147,12 +173,42 @@
       {
         "command": "workbench.action.quickOpenSelectNext",
         "key": "ctrl+n",
-        "when": "gurepaneHistoryPickerVisible && inQuickOpen"
+        "when": "(gurepaneHistoryPickerVisible || gurepaneFolderPickerActive) && inQuickInput"
       },
       {
         "command": "workbench.action.quickOpenSelectPrevious",
         "key": "ctrl+p",
-        "when": "gurepaneHistoryPickerVisible && inQuickOpen"
+        "when": "(gurepaneHistoryPickerVisible || gurepaneFolderPickerActive) && inQuickInput"
+      },
+      {
+        "command": "workbench.action.quickOpenSelectNext",
+        "key": "tab",
+        "when": "(gurepaneHistoryPickerVisible || gurepaneFolderPickerActive) && inQuickInput"
+      },
+      {
+        "command": "workbench.action.quickOpenSelectPrevious",
+        "key": "shift+tab",
+        "when": "(gurepaneHistoryPickerVisible || gurepaneFolderPickerActive) && inQuickInput"
+      },
+      {
+        "command": "gurepane.folderPickerAccept",
+        "key": "ctrl+enter",
+        "when": "gurepaneFolderPickerActive"
+      },
+      {
+        "command": "gurepane.folderPickerAddTarget",
+        "key": "shift+enter",
+        "when": "gurepaneFolderPickerActive"
+      },
+      {
+        "command": "gurepane.folderPickerUp",
+        "key": "ctrl+u",
+        "when": "gurepaneFolderPickerActive"
+      },
+      {
+        "command": "gurepane.folderPickerAddTargetNoTransition",
+        "key": "ctrl+l",
+        "when": "(gurepaneHistoryPickerVisible || gurepaneFolderPickerActive) && inQuickInput"
       }
     ],
     "menus": {
@@ -222,6 +278,11 @@
         {
           "command": "gurepane.deleteNode",
           "when": "view == gurepane.results && viewItem == gurepaneNode",
+          "group": "2_navigation"
+        },
+        {
+          "command": "gurepane.deleteFileGroup",
+          "when": "view == gurepane.results && viewItem == gurepaneFile",
           "group": "2_navigation"
         }
       ]

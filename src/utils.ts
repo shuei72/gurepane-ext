@@ -48,6 +48,22 @@ export function isDirectory(targetPath: string): boolean {
   }
 }
 
+export function findRootPath(filePath: string, roots: string[]): string | undefined {
+  const normalizedFile = filePath.replace(/\\/g, "/").toLowerCase();
+  const sortedRoots = [...roots]
+    .filter(r => r.trim().length > 0)
+    .sort((a, b) => b.length - a.length);
+
+  for (const r of sortedRoots) {
+    const normalizedRoot = r.replace(/\\/g, "/").toLowerCase();
+    const rootWithSlash = normalizedRoot.endsWith("/") ? normalizedRoot : normalizedRoot + "/";
+    if (normalizedFile === normalizedRoot || normalizedFile.startsWith(rootWithSlash)) {
+      return r;
+    }
+  }
+  return undefined;
+}
+
 // Recursively collect descendant folders so Quick Pick can match by any path segment.
 export function getDescendantDirectories(targetPath: string): string[] {
   if (!isDirectory(targetPath)) {
@@ -96,23 +112,21 @@ export function buildDefaultExportUri(fileName: string): vscode.Uri {
 }
 
 export function serializeResultAsTsv(result: Result): string {
-  const rows = [
-    [
-      normalizeTsvField(result.scopeLabel),
-      normalizeTsvField(result.extensionFilter),
-      "",
-      normalizeTsvField(result.query),
-      ""
-    ].join("\t")
-  ];
+  const header = ["File", "Line", "Column", "Match", "Text", "Full Path"].join("\t");
+  const rows = [header];
 
   for (const node of result.nodes) {
+    const rootPath = findRootPath(node.filePath, result.folderPaths) || "";
+    const rootName = path.basename(rootPath) || rootPath;
+    const displayPath = rootName ? `[${rootName}] ${node.relativePath}` : node.relativePath;
+
     rows.push([
-      node.relativePath,
+      normalizeTsvField(displayPath),
       String(node.line),
       String(node.column),
       getMatchedText(node),
-      normalizeTsvField(node.text)
+      normalizeTsvField(node.text),
+      normalizeTsvField(node.filePath)
     ].join("\t"));
   }
 
@@ -120,23 +134,21 @@ export function serializeResultAsTsv(result: Result): string {
 }
 
 export function serializeResultAsCsv(result: Result): string {
-  const rows = [
-    [
-      result.scopeLabel,
-      result.extensionFilter,
-      "",
-      result.query,
-      ""
-    ].map(escapeCsvField).join(",")
-  ];
+  const header = ["File", "Line", "Column", "Match", "Text", "Full Path"].map(escapeCsvField).join(",");
+  const rows = [header];
 
   for (const node of result.nodes) {
+    const rootPath = findRootPath(node.filePath, result.folderPaths) || "";
+    const rootName = path.basename(rootPath) || rootPath;
+    const displayPath = rootName ? `[${rootName}] ${node.relativePath}` : node.relativePath;
+
     rows.push([
-      node.relativePath,
+      displayPath,
       String(node.line),
       String(node.column),
       getMatchedText(node),
-      normalizeTsvField(node.text)
+      node.text,
+      node.filePath
     ].map(escapeCsvField).join(","));
   }
 
